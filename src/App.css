@@ -1,0 +1,111 @@
+/* src/App.css - ESTILOS RESPONSIVOS (SIN SCROLL HORIZONTAL) */
+
+.app-container { display: flex; flex-direction: column; min-height: 100vh; }
+.main-content { flex: 1; padding: 15px; max-width: 1200px; width: 100%; margin: 0 auto; }
+
+/* HEADER */
+.header {
+  background-color: var(--bg-card);
+  padding: 12px 15px; display: flex; justify-content: space-between; align-items: center;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+}
+.logo-section { display: flex; align-items: center; gap: 10px; }
+.league-logo { height: 35px; width: 35px; border-radius: 8px; object-fit: cover; }
+.header h1 { font-size: 1rem; letter-spacing: -0.025em; color: var(--primary); margin: 0; }
+.user-info-container { display: flex; align-items: center; gap: 10px; }
+
+/* BOTONES */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 0.9rem;
+  cursor: pointer; transition: all 0.2s ease; border: 1px solid transparent; gap: 6px;
+}
+.btn:active { transform: scale(0.98); }
+.btn-primary { background-color: var(--primary); color: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.btn-primary:hover { background-color: var(--primary-hover); }
+.btn-secondary { background-color: white; color: var(--text-main); border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+.btn-secondary:hover { background-color: #f9fafb; border-color: #d1d5db; }
+.btn-success { background-color: var(--success); color: white; }
+.btn-danger { background-color: var(--danger); color: white; }
+.btn-logout { background-color: #fee2e2; color: #991b1b; padding: 6px 12px; font-size: 0.8rem; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+
+/* TARJETAS */
+.card {
+  background: var(--bg-card); border-radius: 12px; padding: 20px;
+  box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1); border: 1px solid var(--border); margin-bottom: 15px;
+}
+
+/* DASHBOARD GRID - Ajustado para móviles */
+.dashboard-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 15px;
+}
+.dashboard-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 15px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  cursor: pointer; transition: transform 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05); height: 120px;
+}
+.dashboard-card:active { transform: scale(0.98); }
+.card-icon { font-size: 2rem; margin-bottom: 8px; }
+.card-title { font-weight: 600; font-size: 0.85rem; color: var(--text-main); }
+
+/* TABLAS Y FORMULARIOS - CORRECCIÓN SCROLL */
+.table-responsive { 
+  width: 100%; 
+  overflow-x: auto; /* Permite scroll solo si es estrictamente necesario */
+  border-radius: 12px; 
+  border: 1px solid var(--border); 
+}
+
+.data-table { 
+  width: 100%; 
+  border-collapse: collapse; 
+  background: white; 
+  /* ELIMINADO EL MIN-WIDTH FIJO QUE CAUSABA EL PROBLEMA */
+}
+
+.data-table th { 
+  background-color: #f8fafc; text-align: left; 
+  padding: 10px; /* Padding reducido */
+  font-size: 0.7rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; 
+  border-bottom: 1px solid var(--border); 
+  white-space: nowrap; /* Evita que los títulos se rompan feo */
+}
+
+.data-table td { 
+  padding: 10px; 
+  border-bottom: 1px solid var(--border); 
+  font-size: 0.85rem; color: var(--text-main); 
+}
+
+.data-table tr:hover { background-color: #f9fafb; }
+
+/* Ajustes para móviles muy pequeños */
+@media (max-width: 400px) {
+  .data-table th, .data-table td { padding: 8px 5px; font-size: 0.8rem; }
+  .card { padding: 15px; }
+}
+
+input, select { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; background-color: #f9fafb; font-size: 0.9rem; }
+input:focus, select:focus { outline: none; border-color: var(--accent); background-color: white; box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1); }
+label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; }
+
+/* LOGIN */
+.login-wrapper { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at top right, #f3f4f6, #e5e7eb); padding: 20px; }
+.login-box {
+  background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px);
+  padding: 30px; border-radius: 20px; width: 100%; max-width: 400px; text-align: center;
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1);
+}
+
+/* BADGES */
+.badge { padding: 3px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; display: inline-block; }
+.badge-success { background: #dcfce7; color: #166534; }
+.badge-warning { background: #fef9c3; color: #854d0e; }
+.badge-danger { background: #fee2e2; color: #991b1b; }
+
+/* ANIMACIONES */
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fade-in { animation: fadeIn 0.4s ease-out; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }

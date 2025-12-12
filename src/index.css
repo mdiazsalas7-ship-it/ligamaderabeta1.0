@@ -1,0 +1,74 @@
+/* src/index.css - TEMA CLARO CLEAN UI + ANIMACIONES */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  
+  /* Esquema de Color Profesional (Light Mode) */
+  --bg-body: #f3f4f6;       /* Gris suave para el fondo */
+  --bg-card: #ffffff;       /* Blanco puro para tarjetas */
+  --primary: #0f172a;       /* Navy Oscuro (Autoridad) */
+  --primary-hover: #1e293b; 
+  --primary-light: #f8fafc; /* Blanco humo (para textos sobre fondos oscuros si los hay) */
+  --accent: #f97316;        /* Naranja Basket */
+  --text-main: #111827;     /* Negro suave */
+  --text-muted: #6b7280;    /* Gris medio */
+  --border: #e5e7eb;        /* Borde sutil */
+  --success: #10b981;       /* Verde éxito */
+  --danger: #ef4444;        /* Rojo peligro */
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-body);
+  color: var(--text-main);
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+/* Reset básico para elementos de formulario */
+button, input, select {
+  font-family: inherit;
+  font-size: 100%;
+}
+
+/* Títulos */
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* --- ANIMACIONES --- */
+
+/* 1. Fade In (Entrada suave de páginas) */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out;
+}
+
+/* 2. Pulse (Para el indicador "EN VIVO") */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
