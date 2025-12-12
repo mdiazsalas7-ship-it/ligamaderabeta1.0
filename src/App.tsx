@@ -21,6 +21,8 @@ import StandingsViewer from './StandingsViewer';
 import Forma5Selector from './Forma5Selector';
 import LiveGameViewer from './LiveGameViewer';
 import MatchDetailViewer from './MatchDetailViewer';
+import NewsAdmin from './NewsAdmin'; 
+import NewsFeed from './NewsFeed';   
 
 interface Equipo { id: string; nombre: string; victorias: number; derrotas: number; puntos_favor: number; puntos_contra?: number; puntos?: number; }
 interface UsuarioData extends DocumentData { uid: string; email: string | null; rol: 'admin' | 'delegado' | 'pendiente' | 'jugador' | 'fan'; equipoId?: string; }
@@ -46,6 +48,8 @@ function App() {
   const [selectForma5MatchId, setSelectForma5MatchId] = useState<string | null>(null); 
   const [liveMatchId, setLiveMatchId] = useState<string | null>(null);
   const [detailMatchId, setDetailMatchId] = useState<string | null>(null);
+  const [newsAdminView, setNewsAdminView] = useState(false);
+  const [newsFeedView, setNewsFeedView] = useState(false); // ¡NUEVO ESTADO!
   
   const [dataRefreshKey, setDataRefreshKey] = useState(0); 
 
@@ -54,12 +58,12 @@ function App() {
   const closeAllViews = () => {
     setViewRosterId(null); setMatchView(false); setAdminFormView(false); setUsersView(false); setRegistroView(false);
     setSelectedFormId(null); setCalendarView(false); setMesaTecnicaView(false); setStatsView(false); setStandingsView(false); setSelectForma5MatchId(null);
-    setLiveMatchId(null); setDetailMatchId(null);
+    setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false);
   };
   
   const recalculateStandings = async () => { refreshData(); };
   
-  // AUTH SNAPSHOT
+  // AUTH
   useEffect(() => {
     let unsubProfile: (() => void) | null = null;
     const unsubAuth = onAuthStateChanged(auth, (u) => {
@@ -80,6 +84,7 @@ function App() {
     return () => { unsubAuth(); if (unsubProfile) unsubProfile(); };
   }, []);
 
+  // DATA
   useEffect(() => {
     if (!user || user.rol === 'pendiente') return;
     const load = async () => {
@@ -103,7 +108,7 @@ function App() {
   );
 
   const currentEquipoName = formas21.find(f => f.id === selectedFormId || f.id === viewRosterId)?.nombreEquipo || 'Equipo';
-  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId);
+  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView);
 
   return (
     <div className="app-container">
@@ -113,31 +118,27 @@ function App() {
       </header>
       
       <main className="main-content">
-        {/* VISTAS MODALES */}
+        
+        {/* VISTAS PÚBLICAS */}
+        {newsFeedView && <NewsFeed onClose={() => setNewsFeedView(false)} />}
         {liveMatchId && <LiveGameViewer matchId={liveMatchId} onClose={() => setLiveMatchId(null)} />}
         {detailMatchId && <MatchDetailViewer matchId={detailMatchId} onClose={() => setDetailMatchId(null)} />}
-        
-        {/* CALENDARIO CON LA PROPIEDAD onViewDetail CONECTADA */}
-        {calendarView && (
-            <CalendarViewer 
-                rol={user.rol} 
-                userEquipoId={user.equipoId || null} 
-                onClose={() => setCalendarView(false)} 
-                onViewLive={(id) => { setCalendarView(false); setLiveMatchId(id); }} 
-                onViewDetail={(id) => { setCalendarView(false); setDetailMatchId(id); }} // <--- ESTA ES LA CLAVE
-            />
-        )}
-        
+        {calendarView && <CalendarViewer rol={user.rol} userEquipoId={user.equipoId || null} onClose={() => setCalendarView(false)} onViewLive={(id) => { setCalendarView(false); setLiveMatchId(id); }} onViewDetail={(id) => { setCalendarView(false); setDetailMatchId(id); }} />}
         {statsView && <StatsViewer onClose={() => setStatsView(false)} />}
         {standingsView && <StandingsViewer equipos={equipos} onClose={() => setStandingsView(false)} />}
+
+        {/* VISTAS DE GESTIÓN (ADMIN) */}
+        {newsAdminView && <NewsAdmin onClose={() => setNewsAdminView(false)} />}
         {viewRosterId && <RosterViewer forma21Id={viewRosterId} nombreEquipo={currentEquipoName} onClose={() => setViewRosterId(null)} />}
         {matchView && <MatchForm onSuccess={() => {setMatchView(false); refreshData();}} onClose={() => setMatchView(false)} />}
         {adminFormView && <Forma21AdminViewer onClose={() => setAdminFormView(false)} setViewRosterId={setViewRosterId} />}
         {usersView && <UserManagement onClose={() => setUsersView(false)} />}
+        
+        {/* VISTAS DELEGADO */}
         {registroView && <RegistroForma21 onSuccess={refreshData} onClose={() => setRegistroView(false)} />}
         {selectedFormId && <RosterForm forma21Id={selectedFormId} nombreEquipo={currentEquipoName} onSuccess={() => {setSelectedFormId(null); refreshData();}} onClose={() => setSelectedFormId(null)} />}
-        {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={recalculateStandings} />}
         {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || ''} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
+        {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={recalculateStandings} />}
 
         {isDashboard && (
             <div className="animate-fade-in">
@@ -151,6 +152,8 @@ function App() {
                     <div className="dashboard-card" onClick={()=>setCalendarView(true)}><div className="card-icon">📅</div><div className="card-title">Calendario</div></div>
                     <div className="dashboard-card" onClick={()=>setStandingsView(true)}><div className="card-icon">🏆</div><div className="card-title">Tabla General</div></div>
                     <div className="dashboard-card" onClick={()=>setStatsView(true)}><div className="card-icon">📊</div><div className="card-title">Líderes</div></div>
+                    {/* BOTÓN NUEVO DE NOVEDADES */}
+                    <div className="dashboard-card" onClick={()=>setNewsFeedView(true)}><div className="card-icon">📢</div><div className="card-title">Novedades</div></div>
                 </div>
 
                 {user.rol === 'delegado' && (
@@ -167,6 +170,7 @@ function App() {
                         <h3 style={{fontSize:'1rem', color:'var(--primary)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'10px'}}>Admin</h3>
                         <div className="dashboard-grid">
                             <div className="dashboard-card" onClick={()=>setMesaTecnicaView(true)}><div className="card-icon">🏀</div><div className="card-title">Mesa Técnica</div></div>
+                            <div className="dashboard-card" onClick={()=>setNewsAdminView(true)} style={{border:'2px solid var(--accent)'}}><div className="card-icon" style={{filter:'none'}}>✍️</div><div className="card-title" style={{color:'var(--accent)'}}>Publicar Info</div></div>
                             <div className="dashboard-card" onClick={()=>setAdminFormView(true)}><div className="card-icon">📋</div><div className="card-title">Gestionar F-21</div></div>
                             <div className="dashboard-card" onClick={()=>setUsersView(true)}><div className="card-icon">👥</div><div className="card-title">Usuarios</div></div>
                             <div className="dashboard-card" onClick={()=>setMatchView(true)}><div className="card-icon">🖊️</div><div className="card-title">Marcador Manual</div></div>
