@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { db } from './firebase';
+import { db, storage } from './firebase'; 
 import { collection, addDoc, getDocs, deleteDoc, doc, Timestamp, query, orderBy } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
-interface NewsItem { id: string; titulo: string; cuerpo: string; tipo: 'general' | 'sancion' | 'destacado'; fecha: any; }
+interface NewsItem { id: string; titulo: string; cuerpo: string; tipo: 'general' | 'sancion' | 'destacado'; fecha: any; imageUrl?: string; }
 
 const NewsAdmin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const [news, setNews] = useState<NewsItem[]>([]);
     const [titulo, setTitulo] = useState('');
     const [cuerpo, setCuerpo] = useState('');
     const [tipo, setTipo] = useState<'general' | 'sancion' | 'destacado'>('general');
+    const [imageFile, setImageFile] = useState<File | null>(null);
     const [loading, setLoading] = useState(false);
 
     const fetchNews = async () => {
@@ -24,11 +26,31 @@ const NewsAdmin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const handlePublicar = async (e: React.FormEvent) => {
         e.preventDefault(); setLoading(true);
         try {
+            let imageUrl = '';
+
+            // 1. Subir imagen a Storage si existe
+            if (imageFile) {
+                const storageRef = ref(storage, `noticias/${Date.now()}_${imageFile.name}`);
+                await uploadBytes(storageRef, imageFile);
+                imageUrl = await getDownloadURL(storageRef);
+            }
+
+            // 2. Guardar en Firestore
             await addDoc(collection(db, 'noticias'), {
-                titulo, cuerpo, tipo, fecha: Timestamp.now()
+                titulo, 
+                cuerpo, 
+                tipo, 
+                fecha: Timestamp.now(),
+                imageUrl: imageUrl || null
             });
-            setTitulo(''); setCuerpo(''); alert("Noticia publicada."); fetchNews();
-        } catch (e) { alert("Error al publicar."); } finally { setLoading(false); }
+
+            setTitulo(''); setCuerpo(''); setImageFile(null); 
+            alert("Noticia publicada con éxito."); 
+            fetchNews();
+        } catch (e) { 
+            console.error(e);
+            alert("Error al publicar. Verifica tu conexión."); 
+        } finally { setLoading(false); }
     };
 
     const handleDelete = async (id: string) => {
@@ -47,8 +69,19 @@ const NewsAdmin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             <form onSubmit={handlePublicar} style={{background:'#f9fafb', padding:'20px', borderRadius:'12px', marginBottom:'30px', border:'1px solid var(--border)'}}>
                 <div style={{marginBottom:'15px'}}>
                     <label>Título</label>
-                    <input type="text" value={titulo} onChange={e=>setTitulo(e.target.value)} required placeholder="Ej: Suspensión de Jornada" />
+                    <input type="text" value={titulo} onChange={e=>setTitulo(e.target.value)} required placeholder="Ej: MVP de la Jornada" />
                 </div>
+                
+                <div style={{marginBottom:'15px'}}>
+                    <label>Imagen (Opcional)</label>
+                    <input 
+                        type="file" 
+                        accept="image/*" 
+                        onChange={(e) => { if (e.target.files && e.target.files[0]) setImageFile(e.target.files[0]); }} 
+                        style={{background:'white', padding: '10px', width: '100%'}}
+                    />
+                </div>
+
                 <div style={{marginBottom:'15px'}}>
                     <label>Contenido</label>
                     <textarea 
@@ -65,19 +98,22 @@ const NewsAdmin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                         <option value="destacado">⭐ Destacado</option>
                     </select>
                 </div>
-                <button disabled={loading} className="btn btn-primary" style={{width:'100%'}}>{loading?'Publicando...':'Publicar'}</button>
+                <button disabled={loading} className="btn btn-primary" style={{width:'100%'}}>{loading?'Subiendo...':'Publicar'}</button>
             </form>
 
             <h3 style={{fontSize:'1rem', marginBottom:'15px', color: 'var(--primary)'}}>Historial</h3>
             <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
                 {news.map(n => (
                     <div key={n.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'15px', border:'1px solid var(--border)', borderRadius:'10px', background:'white'}}>
-                        <div>
-                            <div style={{fontWeight:'bold', color: n.tipo==='sancion'?'var(--danger)':'var(--primary)'}}>
-                                {n.tipo==='sancion' && '⚖️'} {n.titulo}
-                            </div>
-                            <div style={{fontSize:'0.8rem', color:'var(--text-muted)'}}>
-                                {n.fecha?.seconds ? new Date(n.fecha.seconds * 1000).toLocaleDateString() : ''}
+                        <div style={{display:'flex', gap:'10px', alignItems:'center'}}>
+                            {n.imageUrl && <img src={n.imageUrl} alt="img" style={{width:'50px', height:'50px', objectFit:'cover', borderRadius:'8px'}} />}
+                            <div>
+                                <div style={{fontWeight:'bold', color: n.tipo==='sancion'?'var(--danger)':'var(--primary)'}}>
+                                    {n.tipo==='sancion' && '⚖️'} {n.titulo}
+                                </div>
+                                <div style={{fontSize:'0.8rem', color:'var(--text-muted)'}}>
+                                    {n.fecha?.seconds ? new Date(n.fecha.seconds * 1000).toLocaleDateString() : ''}
+                                </div>
                             </div>
                         </div>
                         <button onClick={()=>handleDelete(n.id)} className="btn btn-danger" style={{fontSize:'0.8rem', padding:'5px 10px'}}>🗑️</button>

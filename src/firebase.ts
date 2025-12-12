@@ -1,31 +1,24 @@
-// src/firebase.ts
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { getAuth } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
-// --- 1. Importar los módulos de Firebase ---
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore"; // Módulo para la Base de Datos (Datos de equipos)
-import { getAuth } from "firebase/auth"; // Módulo para la Autenticación (Login de Admin/Delegados)
-
-// --- 2. Configuración de tu Proyecto FIREBASE ---
-// (Estos son los datos específicos que proporcionaste)
+// TUS CREDENCIALES REALES (Ya configuradas)
 const firebaseConfig = {
   apiKey: "AIzaSyAjsZYTF8-17cGGhzD2ZOtANIrtgYcDB-A",
   authDomain: "cjoba-app.firebaseapp.com",
   projectId: "cjoba-app",
-  storageBucket: "cjoba-app.firebasestorage.app",
+  storageBucket: "cjoba-app.firebasestorage.app", // Tu bucket correcto
   messagingSenderId: "831383313096",
-  appId: "1:831383313096:web:5a95fdb1815e8c78c623fd",
-  measurementId: "G-5Z805GBY6E"
+  appId: "1:831383313096:web:5985c36185fc2ecac623fd",
+  measurementId: "G-4HNPNXDBKS"
 };
 
-// 3. Inicializar la aplicación principal
-const app = initializeApp(firebaseConfig);
+// Lógica para evitar el error "Duplicate App"
+// Si ya existe una app, usa esa. Si no, inicializa una nueva.
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-// 4. Exportar los servicios que usaremos en la aplicación
-
-// Exportamos la Base de Datos (db)
-export const db = getFirestore(app);
-
-// Exportamos el servicio de Autenticación (auth)
+// Exportar servicios
 export const auth = getAuth(app);
-
-// Fin del archivo src/firebase.ts
+export const db = getFirestore(app);
+export const storage = getStorage(app);
