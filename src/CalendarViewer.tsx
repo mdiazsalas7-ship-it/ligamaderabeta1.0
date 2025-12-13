@@ -1,95 +1,166 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore'; 
-import type { DocumentData } from 'firebase/firestore'; 
+import { collection, getDocs, query, doc, deleteDoc, updateDoc } from 'firebase/firestore'; // Quitamos orderBy para hacerlo manual
 
-interface CalendarioMatch extends DocumentData { id: string; jornada: number; equipoLocalNombre: string; equipoVisitanteNombre: string; equipoLocalId: string; equipoVisitanteId: string; fechaAsignada: string | null; marcadorLocal: number; marcadorVisitante: number; partidoRegistradoId: string | null; }
+// Interfaces
+interface Match { id: string; fecha: string; hora: string; equipoA: string; equipoB: string; categoria: string; rama: string; cancha: string; estatus: string; logoUrlA?: string; logoUrlB?: string; resultadoA?: number; resultadoB?: number; }
+interface Equipo { nombre: string; logoUrl?: string; } 
 
-interface CalendarViewerProps {
-    rol: string; 
-    userEquipoId: string | null; 
-    onClose?: () => void;
-    onViewLive?: (matchId: string) => void;
-    onViewDetail?: (matchId: string) => void; // Esta es la función para ver el Boxscore
-}
-
-const CalendarViewer: React.FC<CalendarViewerProps> = ({ rol, userEquipoId, onClose, onViewLive, onViewDetail }) => {
-    const [calendar, setCalendar] = useState<CalendarioMatch[]>([]);
+const CalendarViewer: React.FC<{ rol: string, userEquipoId: string | null, onClose: () => void, onViewLive: (id: string) => void, onViewDetail: (id: string) => void }> = ({ rol, userEquipoId, onClose, onViewLive, onViewDetail }) => {
+    const [partidos, setPartidos] = useState<Match[]>([]);
     const [loading, setLoading] = useState(true);
-    const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
-    const [newDate, setNewDate] = useState('');
-    const [newTime, setNewTime] = useState('');
+    const [filter, setFilter] = useState('todos');
 
     useEffect(() => {
-        const fetchCalendar = async () => {
-            setLoading(true);
+        const fetchMatches = async () => {
             try {
-                const snapshot = await getDocs(collection(db, 'calendario'));
-                const matches = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CalendarioMatch));
-                matches.sort((a, b) => a.jornada - b.jornada);
-                setCalendar(matches);
-            } catch (err) {} finally { setLoading(false); }
+                // 1. Cargar Partidos (SIN ORDENAR en la consulta para evitar errores de índice)
+                const q = query(collection(db, 'calendario'));
+                const snap = await getDocs(q);
+                let matches = snap.docs.map(d => ({ id: d.id, ...d.data() } as Match));
+
+                // 2. ORDENAR MANUALMENTE (JavaScipt) - Más seguro
+                matches.sort((a, b) => {
+                    if (a.fecha !== b.fecha) return a.fecha.localeCompare(b.fecha);
+                    return a.hora.localeCompare(b.hora);
+                });
+
+                // 3. Cargar Equipos (para obtener los logos)
+                const eqSnap = await getDocs(collection(db, 'equipos'));
+                const equipoLogos: Record<string, string> = {};
+                eqSnap.forEach(d => {
+                    const data = d.data();
+                    // Normalizamos nombres (quitamos espacios extra) para asegurar coincidencia
+                    if (data.nombre && data.logoUrl) {
+                        equipoLogos[data.nombre.trim()] = data.logoUrl;
+                    }
+                });
+
+                // 4. Pegar los logos a los partidos
+                matches = matches.map(m => ({
+                    ...m,
+                    logoUrlA: equipoLogos[m.equipoA?.trim()] || null,
+                    logoUrlB: equipoLogos[m.equipoB?.trim()] || null
+                }));
+
+                setPartidos(matches);
+            } catch (e) { 
+                console.error("Error cargando calendario:", e); 
+            } finally { setLoading(false); }
         };
-        fetchCalendar();
+        fetchMatches();
     }, []);
 
-    const handleSaveDate = async (matchId: string) => {
-        if (rol !== 'admin') return;
-        const newFechaAsignada = (newDate && newTime) ? `${newDate}T${newTime}:00` : null;
-        try {
-            await updateDoc(doc(db, 'calendario', matchId), { fechaAsignada: newFechaAsignada });
-            setCalendar(prev => prev.map(m => m.id === matchId ? {...m, fechaAsignada: newFechaAsignada} : m));
-            setEditingMatchId(null);
-        } catch (err) {}
+    const handleDelete = async (id: string) => {
+        if (!window.confirm("¿Eliminar partido?")) return;
+        await deleteDoc(doc(db, 'calendario', id));
+        setPartidos(p => p.filter(m => m.id !== id));
     };
 
-    if (loading) return <div className="card" style={{textAlign:'center', padding:'40px'}}>Cargando...</div>;
+    const handleFinalize = async (id: string) => {
+        if (!window.confirm("¿Marcar como finalizado?")) return;
+        await updateDoc(doc(db, 'calendario', id), { estatus: 'finalizado' });
+        setPartidos(prev => prev.map(m => m.id === id ? { ...m, estatus: 'finalizado' } : m));
+    };
+
+    // Filtros
+    let filteredMatches = partidos;
+    if (filter === 'programados') {
+        filteredMatches = partidos.filter(p => p.estatus === 'programado' || p.estatus === 'vivo');
+    } else if (filter === 'finalizados') {
+        filteredMatches = partidos.filter(p => p.estatus === 'finalizado');
+    }
+
+    // Agrupar por fecha
+    const grouped: Record<string, Match[]> = {};
+    filteredMatches.forEach(m => {
+        if (!grouped[m.fecha]) grouped[m.fecha] = [];
+        grouped[m.fecha].push(m);
+    });
+
+    // Helper para renderizar logo
+    const renderLogo = (url?: string) => (
+        url ? <img src={url} alt="Logo" style={{width:'40px', height:'40px', borderRadius:'50%', objectFit:'cover', border:'1px solid #ddd', backgroundColor: 'white'}} /> 
+            : <span style={{fontSize:'1.5rem'}}>🏀</span>
+    );
 
     return (
-        <div className="animate-fade-in" style={{ maxWidth: '900px', margin: '0 auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '25px', alignItems: 'center' }}>
-                <h2 style={{ fontSize: '1.5rem', color: 'var(--primary)', margin: 0 }}>📅 Calendario Oficial</h2>
-                {onClose && <button onClick={onClose} className="btn btn-secondary">← Volver</button>}
+        <div className="animate-fade-in" style={{maxWidth:'800px', margin:'0 auto'}}>
+            <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px', alignItems:'center'}}>
+                <h2 style={{color:'var(--primary)', margin:0, fontSize:'1.5rem'}}>📅 Calendario de Juegos</h2>
+                <button onClick={onClose} className="btn btn-secondary">← Volver</button>
             </div>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                {calendar.map(match => {
-                    const highlight = userEquipoId && (match.equipoLocalId === userEquipoId || match.equipoVisitanteId === userEquipoId);
-                    const isPlayed = !!match.partidoRegistradoId;
-                    const isLive = !isPlayed && (match.marcadorLocal > 0 || match.marcadorVisitante > 0); 
 
-                    return (
-                        <div key={match.id} className="card" style={{ padding: '20px', borderLeft: `5px solid ${isPlayed ? 'var(--success)' : (isLive ? 'var(--danger)' : '#e5e7eb')}`, backgroundColor: highlight ? '#f8fafc' : 'white' }}>
-                            <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '10px', alignItems: 'center'}}>
-                                <span className="badge" style={{background: '#f1f5f9'}}>JORNADA {match.jornada}</span>
-                                {isPlayed ? <span className="badge badge-success">FINALIZADO</span> : 
-                                 isLive ? <span className="badge badge-danger animate-pulse">🔴 EN JUEGO</span> :
-                                 (match.fechaAsignada ? <span className="badge" style={{background: '#dbeafe', color: '#1e40af'}}>PROGRAMADO</span> : <span className="badge">POR DEFINIR</span>)}
-                            </div>
+            <div style={{display:'flex', gap:'10px', marginBottom:'20px', overflowX:'auto', paddingBottom:'5px'}}>
+                <button className={`btn ${filter==='todos'?'btn-primary':'btn-secondary'}`} onClick={()=>setFilter('todos')}>Todos</button>
+                <button className={`btn ${filter==='programados'?'btn-primary':'btn-secondary'}`} onClick={()=>setFilter('programados')}>Programados</button>
+                <button className={`btn ${filter==='finalizados'?'btn-primary':'btn-secondary'}`} onClick={()=>setFilter('finalizados')}>Finalizados</button>
+            </div>
 
-                            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', fontWeight: highlight?'700':'500'}}>
-                                <span>{match.equipoLocalNombre}</span>
-                                <div style={{textAlign:'center'}}><span style={{background: isPlayed || isLive ? 'var(--text-main)' : '#f3f4f6', color: isPlayed || isLive ? 'white' : 'var(--text-muted)', padding: '5px 15px', borderRadius: '8px', fontWeight: 'bold'}}>{isPlayed || isLive ? `${match.marcadorLocal} - ${match.marcadorVisitante}` : 'VS'}</span></div>
-                                <span>{match.equipoVisitanteNombre}</span>
-                            </div>
+            {loading ? <div style={{textAlign:'center', padding:'20px'}}>Cargando juegos...</div> : 
+             Object.keys(grouped).length === 0 ? <div className="card" style={{textAlign:'center', padding:'30px'}}>No hay partidos en esta categoría.</div> : (
+                Object.keys(grouped).sort().map(fecha => (
+                    <div key={fecha} style={{marginBottom:'30px'}}>
+                        <h3 style={{
+                            background:'var(--primary)', color:'white', padding:'10px 15px', 
+                            borderRadius:'8px', fontSize:'1rem', marginBottom:'10px',
+                            display:'flex', justifyContent:'space-between', alignItems:'center'
+                        }}>
+                            {new Date(fecha + 'T12:00:00').toLocaleDateString(undefined, {weekday:'long', day:'numeric', month:'long'})}
+                            <span style={{fontSize:'0.8rem', opacity:0.8}}>{grouped[fecha].length} juegos</span>
+                        </h3>
+                        <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
+                            {grouped[fecha].map(match => (
+                                <div key={match.id} className="card match-card" style={{padding:'15px', display:'flex', flexDirection:'column', gap:'10px'}}>
+                                    <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.8rem', color:'var(--text-muted)'}}>
+                                        <span>📍 {match.cancha} - {match.hora}</span>
+                                        <span>{match.categoria} {match.rama}</span>
+                                    </div>
+                                    
+                                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                                        {/* EQUIPO A */}
+                                        <div style={{display:'flex', alignItems:'center', gap:'10px', flex:1}}>
+                                            {renderLogo(match.logoUrlA)}
+                                            <span style={{fontWeight:'bold', fontSize:'1rem', lineHeight: 1.2}}>{match.equipoA}</span>
+                                        </div>
 
-                            <div style={{marginTop:'15px', paddingTop:'15px', borderTop:'1px solid #eee', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                                <div style={{fontSize:'0.9rem', color: 'var(--text-muted)'}}>📅 {match.fechaAsignada ? new Date(match.fechaAsignada).toLocaleString() : 'Sin fecha'}</div>
-                                
-                                {/* BOTONES DE ACCIÓN: Aquí está el cambio */}
-                                {isLive && onViewLive && <button onClick={() => onViewLive(match.id)} className="btn" style={{background: 'var(--danger)', color: 'white', fontSize:'0.8rem', padding:'6px 12px', border:'none'}}>📺 Ver en Vivo</button>}
-                                
-                                {isPlayed && onViewDetail && (
-                                    <button onClick={() => onViewDetail(match.partidoRegistradoId!)} className="btn" style={{background: 'var(--primary)', color: 'white', fontSize:'0.8rem', padding:'6px 12px', border:'none'}}>📊 Boxscore</button>
-                                )}
+                                        {/* VS o RESULTADO */}
+                                        <div style={{padding:'0 10px', fontWeight:'bold', fontSize:'1.1rem', color:'var(--accent)', minWidth:'60px', textAlign:'center'}}>
+                                            {match.estatus === 'finalizado' && match.resultadoA !== undefined ? 
+                                                <span style={{background:'#eee', padding:'2px 8px', borderRadius:'4px'}}>{match.resultadoA} - {match.resultadoB}</span> : 
+                                                <span style={{color:'#ccc'}}>VS</span>
+                                            }
+                                        </div>
 
-                                {rol === 'admin' && !isPlayed && !isLive && <button onClick={()=>{setEditingMatchId(match.id)}} className="btn btn-secondary" style={{fontSize:'0.8rem'}}>✏️</button>}
-                                {editingMatchId === match.id && <div><input type="date" onChange={e=>setNewDate(e.target.value)} /><input type="time" onChange={e=>setNewTime(e.target.value)} /><button onClick={()=>handleSaveDate(match.id)} className="btn btn-success">OK</button></div>}
-                            </div>
+                                        {/* EQUIPO B */}
+                                        <div style={{display:'flex', alignItems:'center', gap:'10px', flex:1, justifyContent:'flex-end'}}>
+                                            <span style={{fontWeight:'bold', fontSize:'1rem', textAlign:'right', lineHeight: 1.2}}>{match.equipoB}</span>
+                                            {renderLogo(match.logoUrlB)}
+                                        </div>
+                                    </div>
+
+                                    {/* BOTONES DE ACCIÓN */}
+                                    <div style={{display:'flex', gap:'10px', marginTop:'5px', paddingTop:'10px', borderTop:'1px solid #eee', justifyContent:'flex-end'}}>
+                                        {match.estatus === 'vivo' && (
+                                            <button onClick={()=>onViewLive(match.id)} className="btn btn-danger pulsate" style={{padding:'5px 10px', fontSize:'0.8rem'}}>🔴 EN VIVO</button>
+                                        )}
+                                        {match.estatus === 'finalizado' && (
+                                            <button onClick={()=>onViewDetail(match.id)} className="btn btn-secondary" style={{padding:'5px 10px', fontSize:'0.8rem'}}>📊 Ver Stats</button>
+                                        )}
+                                        
+                                        {rol === 'admin' && (
+                                            <>
+                                                {match.estatus !== 'finalizado' && <button onClick={()=>handleFinalize(match.id)} className="btn btn-primary" style={{padding:'5px 10px', fontSize:'0.8rem'}}>🏁 Finalizar</button>}
+                                                <button onClick={()=>handleDelete(match.id)} className="btn btn-danger" style={{padding:'5px 10px', fontSize:'0.8rem'}}>🗑️</button>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
                         </div>
-                    );
-                })}
-            </div>
+                    </div>
+                ))
+            )}
         </div>
     );
 };

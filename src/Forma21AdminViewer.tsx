@@ -1,61 +1,117 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, getDocs, doc, writeBatch } from 'firebase/firestore'; // updateDoc eliminado
-import type { DocumentData } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, deleteDoc, query, where, addDoc } from 'firebase/firestore';
 
-interface Forma21 extends DocumentData { id: string; nombreEquipo: string; delegadoEmail: string; delegadoId: string; rosterCompleto?: boolean; aprobado?: boolean; equipoId?: string; cantidadJugadores?: number; }
+interface Forma21 { id: string; delegadoId: string; nombreEquipo: string; categoria?: string; rama?: string; estatus?: string; logoUrl?: string; }
 
-const Forma21AdminViewer: React.FC<{ onClose: () => void; setViewRosterId: (id: string | null) => void }> = ({ onClose, setViewRosterId }) => {
-    const [formas21, setFormas21] = useState<Forma21[]>([]);
-    const [loading, setLoading] = useState(true);
+const Forma21AdminViewer: React.FC<{ onClose: () => void, setViewRosterId: (id: string) => void }> = ({ onClose, setViewRosterId }) => {
+    const [formas, setFormas] = useState<Forma21[]>([]);
+    const [syncStatus, setSyncStatus] = useState(''); // Para mostrar mensaje de sincronización
 
-    useEffect(() => {
-        const fetch = async () => {
+    const fetchFormas = async () => {
+        try {
             const snap = await getDocs(collection(db, 'forma21s'));
-            const data = await Promise.all(snap.docs.map(async d => {
-                const jSnap = await getDocs(collection(db, 'forma21s', d.id, 'jugadores'));
-                return { id: d.id, ...d.data(), rosterCompleto: jSnap.docs.length >= 10, cantidadJugadores: jSnap.docs.length } as Forma21;
-            }));
-            setFormas21(data.sort((a, b) => (a.aprobado === b.aprobado ? 0 : a.aprobado ? 1 : -1)));
-            setLoading(false);
-        };
-        fetch();
-    }, []);
-    
-    const handleApprove = async (forma: Forma21) => {
-        if (!forma.rosterCompleto || !window.confirm("¿Aprobar?")) return;
-        const batch = writeBatch(db);
-        batch.update(doc(db, 'forma21s', forma.id), { aprobado: true });
-        batch.update(doc(db, 'usuarios', forma.delegadoId), { rol: 'delegado', equipoId: forma.equipoId });
-        await batch.commit(); alert("Aprobado.");
+            const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as Forma21));
+            setFormas(data);
+            
+            // --- AUTO-SINCRONIZACIÓN DE LOGOS AL ABRIR ---
+            sincronizarLogos(data);
+        } catch (e) { console.error(e); }
     };
 
-    if (loading) return <div className="card" style={{textAlign:'center', padding:'40px'}}>Cargando...</div>;
+    // Función que corre sola para arreglar los logos faltantes
+    const sincronizarLogos = async (listaFormas: Forma21[]) => {
+        setSyncStatus('⏳ Revisando logos...');
+        let actualizados = 0;
+        try {
+            for (const f of listaFormas) {
+                if (!f.logoUrl) continue; // Si el delegado no subió foto, saltamos
+
+                // Buscamos el equipo en la tabla pública por nombre exacto
+                const q = query(collection(db, 'equipos'), where('nombre', '==', f.nombreEquipo));
+                const equipoSnap = await getDocs(q);
+
+                // Si encontramos al equipo, le ponemos el logo
+                equipoSnap.forEach(async (docEq) => {
+                    const dataEq = docEq.data();
+                    // Solo actualizamos si no tiene logo o es diferente
+                    if (dataEq.logoUrl !== f.logoUrl) {
+                        await updateDoc(doc(db, 'equipos', docEq.id), { logoUrl: f.logoUrl });
+                        actualizados++;
+                    }
+                });
+            }
+            if (actualizados > 0) setSyncStatus(`✅ Se actualizaron ${actualizados} logos nuevos.`);
+            else setSyncStatus('✅ Todos los logos están al día.');
+        } catch (e) { console.error(e); setSyncStatus(''); }
+    };
+
+    useEffect(() => { fetchFormas(); }, []);
+
+    const handleAprobar = async (f: Forma21) => {
+        if (!window.confirm(`¿Aprobar al equipo ${f.nombreEquipo}?`)) return;
+        try {
+            await updateDoc(doc(db, 'forma21s', f.id), { estatus: 'aprobado' });
+            
+            // Crear entrada en la tabla de posiciones si no existe
+            const q = query(collection(db, 'equipos'), where('nombre', '==', f.nombreEquipo));
+            const exists = await getDocs(q);
+            if (exists.empty) {
+                await addDoc(collection(db, 'equipos'), {
+                    nombre: f.nombreEquipo, victorias: 0, derrotas: 0, puntos_favor: 0, puntos_contra: 0, puntos: 0,
+                    categoria: f.categoria || '', rama: f.rama || '',
+                    logoUrl: f.logoUrl || null // IMPORTANTE: Guardar logo al crear
+                });
+            }
+            alert("Equipo aprobado.");
+            fetchFormas();
+        } catch (e) { alert("Error al aprobar"); }
+    };
+
+    const handleDelete = async (id: string) => {
+        if (!window.confirm("¿Eliminar esta inscripción?")) return;
+        await deleteDoc(doc(db, 'forma21s', id));
+        setFormas(prev => prev.filter(f => f.id !== id));
+    };
 
     return (
-        <div className="animate-fade-in" style={{ maxWidth: '1200px', margin: '0 auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '25px' }}>
-                <h2 style={{ fontSize: '1.5rem', color: 'var(--primary)', margin: 0 }}>📋 Gestión de Formas 21</h2>
-                <button onClick={onClose} className="btn btn-secondary">← Volver</button>
+        <div className="animate-fade-in" style={{maxWidth:'1000px', margin:'0 auto'}}>
+            <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px', alignItems:'center'}}>
+                <div>
+                    <h2 style={{color:'var(--primary)', margin:0}}>📋 Gestión de Inscripciones</h2>
+                    {/* Mensaje de estado de la sincronización */}
+                    <small style={{color:'var(--accent)', fontWeight:'bold'}}>{syncStatus}</small>
+                </div>
+                <button onClick={onClose} className="btn btn-secondary">Cerrar</button>
             </div>
-            
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
-                {formas21.map((forma) => (
-                    <div key={forma.id} className="card" style={{ padding: '20px', borderLeft: `5px solid ${forma.aprobado ? 'var(--success)' : 'var(--accent)'}` }}>
-                        <div style={{marginBottom:'15px'}}>
-                            <h3>{forma.nombreEquipo}</h3>
-                            <p style={{fontSize:'0.85rem', color:'var(--text-muted)'}}>{forma.delegadoEmail}</p>
-                            <span className={`badge ${forma.aprobado ? 'badge-success' : 'badge-warning'}`}>{forma.aprobado ? 'APROBADO' : 'PENDIENTE'}</span>
-                        </div>
-                        <div style={{background: '#f9fafb', padding: '10px', borderRadius: '8px', marginBottom: '15px'}}>
-                            <span style={{fontWeight:'bold', color: forma.rosterCompleto ? 'var(--success)' : 'var(--danger)'}}>{forma.cantidadJugadores} / 15 Jugadores</span>
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                            <button onClick={() => setViewRosterId(forma.id)} className="btn btn-secondary" style={{fontSize:'0.85rem'}}>Ver Roster</button>
-                            {!forma.aprobado && <button onClick={() => handleApprove(forma)} className="btn btn-primary" disabled={!forma.rosterCompleto} style={{fontSize:'0.85rem'}}>Aprobar</button>}
-                        </div>
-                    </div>
-                ))}
+
+            <div className="table-container">
+                <table className="custom-table">
+                    <thead>
+                        <tr><th>Logo</th><th>Equipo</th><th>Categoría</th><th>Estatus</th><th>Acciones</th></tr>
+                    </thead>
+                    <tbody>
+                        {formas.map(f => (
+                            <tr key={f.id}>
+                                <td>{f.logoUrl ? <img src={f.logoUrl} alt="Logo" style={{width:'40px', height:'40px', borderRadius:'50%', objectFit:'cover'}} /> : '🛡️'}</td>
+                                <td style={{fontWeight:'bold'}}>{f.nombreEquipo}</td>
+                                <td>{f.categoria} ({f.rama})</td>
+                                <td>
+                                    <span style={{padding:'4px 8px', borderRadius:'12px', fontSize:'0.8rem', background: f.estatus==='aprobado'?'#dcfce7':'#fef9c3', color: f.estatus==='aprobado'?'#166534':'#854d0e'}}>
+                                        {f.estatus || 'Pendiente'}
+                                    </span>
+                                </td>
+                                <td>
+                                    <div style={{display:'flex', gap:'5px'}}>
+                                        <button onClick={()=>setViewRosterId(f.id)} className="btn btn-secondary" style={{padding:'5px'}}>👁️</button>
+                                        {f.estatus !== 'aprobado' && <button onClick={()=>handleAprobar(f)} className="btn btn-primary" style={{padding:'5px'}}>✅</button>}
+                                        <button onClick={()=>handleDelete(f.id)} className="btn btn-danger" style={{padding:'5px'}}>🗑️</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
             </div>
         </div>
     );
