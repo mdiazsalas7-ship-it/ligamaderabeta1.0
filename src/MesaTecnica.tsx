@@ -10,7 +10,7 @@ interface PlayerGameStats {
     faltasPersonales: number;
     faltasTecnicas: number;
     faltasAntideportivas: number;
-    faltasTotales: number; // Suma de P + T + U
+    faltasTotales: number; 
     expulsado: boolean;
 }
 
@@ -26,18 +26,18 @@ interface MatchData {
 }
 
 const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void }> = ({ onClose, onMatchFinalized }) => {
-    // ESTADOS DE DATOS
+    // ESTADOS
     const [matches, setMatches] = useState<any[]>([]);
     const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
     const [matchData, setMatchData] = useState<MatchData | null>(null);
     
-    // ROSTERS Y JUEGO
+    // ROSTERS
     const [localOnCourt, setLocalOnCourt] = useState<Player[]>([]);
     const [localBench, setLocalBench] = useState<Player[]>([]);
     const [visitanteOnCourt, setVisitanteOnCourt] = useState<Player[]>([]);
     const [visitanteBench, setVisitanteBench] = useState<Player[]>([]);
     
-    // ESTADÍSTICAS EN TIEMPO REAL (Para controlar expulsiones localmente)
+    // STATS CACHE
     const [statsCache, setStatsCache] = useState<Record<string, PlayerGameStats>>({});
 
     // RELOJ
@@ -49,7 +49,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const [selectedPlayer, setSelectedPlayer] = useState<{player: Player, team: 'local'|'visitante'} | null>(null);
     const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
 
-    // 1. CARGAR LISTA DE JUEGOS
+    // 1. CARGAR LISTA
     useEffect(() => {
         const fetchMatches = async () => {
             const q = query(collection(db, 'calendario')); 
@@ -63,7 +63,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         if (!selectedMatchId) fetchMatches();
     }, [selectedMatchId]);
 
-    // 2. RELOJ (DÉCIMAS)
+    // 2. RELOJ
     useEffect(() => {
         if (isRunning && timeLeft > 0) {
             timerRef.current = setInterval(() => {
@@ -86,7 +86,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     };
 
-    // 3. ESCUCHAR PARTIDO Y STATS INICIALES
+    // 3. ESCUCHAR DATA
     useEffect(() => {
         if (!selectedMatchId) return;
         const unsub = onSnapshot(doc(db, 'calendario', selectedMatchId), (docSnap) => {
@@ -112,7 +112,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         return () => unsub();
     }, [selectedMatchId]);
 
-    // 4. INICIALIZAR ROSTERS
+    // 4. INICIALIZAR
     useEffect(() => {
         if (matchData && localOnCourt.length === 0 && localBench.length === 0) {
             const rosterL = matchData.forma5?.[matchData.equipoLocalId] || [];
@@ -122,7 +122,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             setVisitanteOnCourt(rosterV.slice(0, 5));
             setVisitanteBench(rosterV.slice(5));
             
-            // Inicializar caché de stats en 0
             const cache: Record<string, PlayerGameStats> = {};
             [...rosterL, ...rosterV].forEach(p => {
                 cache[p.id] = { puntos: 0, faltasPersonales: 0, faltasTecnicas: 0, faltasAntideportivas: 0, faltasTotales: 0, expulsado: false };
@@ -131,7 +130,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         }
     }, [matchData?.id]);
 
-    // --- LÓGICA DE JUEGO ---
+    // --- FUNCIONES ---
 
     const addLog = async (text: string, type: GameEvent['type'], team: 'local'|'visitante'|'system') => {
         if (!matchData) return;
@@ -143,19 +142,12 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     };
 
     const checkExpulsion = (stats: PlayerGameStats) => {
-        // REGLAS DE EXPULSIÓN FIBA:
-        // 1. 5 Faltas Totales (Personales + Técnicas + Antideportivas)
-        // 2. 2 Faltas Técnicas
-        // 3. 2 Faltas Antideportivas
-        // 4. 1 Técnica + 1 Antideportiva
         if (
             stats.faltasTotales >= 5 || 
             stats.faltasTecnicas >= 2 || 
             stats.faltasAntideportivas >= 2 || 
             (stats.faltasTecnicas >= 1 && stats.faltasAntideportivas >= 1)
-        ) {
-            return true;
-        }
+        ) return true;
         return false;
     };
 
@@ -163,67 +155,49 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         if (!matchData || !selectedPlayer) return;
         const { player, team } = selectedPlayer;
         
-        // Verificar si ya estaba expulsado (por seguridad)
         if (statsCache[player.id]?.expulsado) {
-            alert("⛔ Este jugador está expulsado.");
+            alert("⛔ Jugador expulsado.");
             return;
         }
 
         const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
         
-        // 1. Actualizar Caché Local y Verificar Expulsión
+        // Actualizar caché local
         const currentStats = statsCache[player.id] || { puntos:0, faltasPersonales:0, faltasTecnicas:0, faltasAntideportivas:0, faltasTotales:0, expulsado:false };
         let newStats = { ...currentStats };
         let logText = '';
         let updateGlobalScore = false;
         let updateGlobalFoul = false;
-        let statField = ''; // Campo para stats_partido
+        let statField = ''; 
 
-        // CLASIFICAR ACCIÓN
         if (action === 'puntos') {
             newStats.puntos += val;
             updateGlobalScore = true;
             logText = `🏀 ${player.nombre} (+${val})`;
             statField = 'puntos';
-        } 
-        else if (action.startsWith('falta')) {
+        } else if (action.startsWith('falta')) {
             updateGlobalFoul = true;
             newStats.faltasTotales += 1;
+            if (action === 'falta_P') { newStats.faltasPersonales += 1; logText = `🤜 Falta P: ${player.nombre}`; statField = 'faltas'; }
+            else if (action === 'falta_T') { newStats.faltasTecnicas += 1; logText = `⚠️ Falta T: ${player.nombre}`; statField = 'faltas'; }
+            else if (action === 'falta_U') { newStats.faltasAntideportivas += 1; logText = `🛑 Falta U: ${player.nombre}`; statField = 'faltas'; }
             
-            if (action === 'falta_P') {
-                newStats.faltasPersonales += 1;
-                logText = `🤜 Falta Personal: ${player.nombre}`;
-                statField = 'faltas';
-            } else if (action === 'falta_T') {
-                newStats.faltasTecnicas += 1;
-                logText = `⚠️ Falta TÉCNICA: ${player.nombre}`;
-                statField = 'faltas'; // Se puede separar si la BD lo soporta, por ahora cuenta como falta general
-            } else if (action === 'falta_U') {
-                newStats.faltasAntideportivas += 1;
-                logText = `🛑 Falta ANTIDEPORTIVA: ${player.nombre}`;
-                statField = 'faltas';
-            }
-
-            // Chequear Expulsión
             if (checkExpulsion(newStats)) {
                 newStats.expulsado = true;
-                logText += " (EXPULSADO 🟥)";
-                alert(`🟥 JUGADOR EXPULSADO: ${player.nombre}\n\nMotivo: Acumulación de faltas.`);
+                logText += " (EXPULSADO)";
+                alert(`🟥 EXPULSADO: ${player.nombre}`);
             }
-        } 
-        else {
-            // Otras stats
+        } else {
             statField = action;
-            if (action === 'rebotes') logText = `🖐️ Rebote: ${player.nombre}`;
-            if (action === 'asistencias') logText = `🅰️ Asistencia: ${player.nombre}`;
+            if (action === 'rebotes') logText = `🖐️ Reb: ${player.nombre}`;
+            if (action === 'asistencias') logText = `🅰️ Asist: ${player.nombre}`;
             if (action === 'robos') logText = `⚡ Robo: ${player.nombre}`;
-            if (action === 'bloqueos') logText = `🚫 Bloqueo: ${player.nombre}`;
+            if (action === 'bloqueos') logText = `🚫 Tapón: ${player.nombre}`;
         }
 
-        // Actualizar estado local
         setStatsCache(prev => ({ ...prev, [player.id]: newStats }));
 
-        // 2. Actualizar Firebase (Calendario / Marcador Global)
+        // FIREBASE UPDATE
         if (updateGlobalScore) {
             const field = team === 'local' ? 'marcadorLocal' : 'marcadorVisitante';
             await updateDoc(doc(db, 'calendario', matchData.id), { [field]: increment(val) });
@@ -234,16 +208,11 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         }
         await addLog(logText, action.startsWith('falta') ? 'foul' : 'stat', team);
 
-        // 3. Actualizar Firebase (Estadística Individual)
+        // Stats Individuales
         const statRef = doc(db, 'stats_partido', `${matchData.id}_${player.id}`);
         const payload: any = {
-            partidoId: matchData.id,
-            jugadorId: player.id,
-            nombre: player.nombre,
-            equipo: teamName,
-            fecha: new Date().toISOString()
+            partidoId: matchData.id, jugadorId: player.id, nombre: player.nombre, equipo: teamName, fecha: new Date().toISOString()
         };
-
         if (action === 'puntos') {
             payload.puntos = increment(val);
             if (val === 3) payload.triples = increment(1);
@@ -252,23 +221,27 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         }
         await setDoc(statRef, payload, { merge: true });
 
-        // Si fue expulsado, deseleccionar
         if (newStats.expulsado) setSelectedPlayer(null);
     };
 
     const handleFinalize = async () => {
-        if (!matchData || !window.confirm("¿FINALIZAR PARTIDO?\n\nEl resultado y estadísticas serán definitivos.")) return;
+        if (!matchData || !window.confirm("¿FINALIZAR PARTIDO?\n\nEl resultado se guardará en el calendario y la tabla.")) return;
         
         try {
-            // 1. Cerrar Partido (ESTO ACTUALIZA EL CALENDARIO VISUALMENTE)
-            await updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'finalizado' });
+            // AQUÍ ESTÁ EL CAMBIO CLAVE:
+            // Forzamos la escritura del marcador actual al cerrar el partido
+            // para asegurar que el Calendario vea exactamente lo que vio la mesa.
+            await updateDoc(doc(db, 'calendario', matchData.id), { 
+                estatus: 'finalizado',
+                marcadorLocal: matchData.marcadorLocal, // Forzar guardado del valor actual
+                marcadorVisitante: matchData.marcadorVisitante // Forzar guardado del valor actual
+            });
 
-            // 2. Calcular Ganador
+            // Actualizar Tabla de Posiciones
             const localWon = matchData.marcadorLocal > matchData.marcadorVisitante;
             const winnerId = localWon ? matchData.equipoLocalId : matchData.equipoVisitanteId;
             const loserId = localWon ? matchData.equipoVisitanteId : matchData.equipoLocalId;
 
-            // 3. Actualizar Tabla de Posiciones
             const winRef = doc(db, 'equipos', winnerId);
             const winSnap = await getDoc(winRef);
             if (winSnap.exists()) {
@@ -293,22 +266,16 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 });
             }
 
-            alert("✅ Partido finalizado correctamente.");
+            alert("✅ Partido finalizado. El marcador se ha actualizado en el Calendario.");
             onMatchFinalized();
             onClose();
 
-        } catch (e) { console.error(e); alert("Error finalizando."); }
+        } catch (e) { console.error(e); alert("Error al finalizar."); }
     };
 
-    // SUSTITUCIÓN
     const confirmSubstitution = (playerOut: Player) => {
         if (!subMode) return;
-        // Impedir que entre alguien expulsado (aunque debería estar en la banca)
-        if (statsCache[subMode.playerIn.id]?.expulsado) {
-            alert("⛔ No puedes meter a un jugador expulsado.");
-            setSubMode(null);
-            return;
-        }
+        if (statsCache[subMode.playerIn.id]?.expulsado) { alert("⛔ Jugador expulsado."); setSubMode(null); return; }
 
         if (subMode.team === 'local') {
             setLocalOnCourt(prev => [...prev.filter(p => p.id !== playerOut.id), subMode.playerIn]);
@@ -322,10 +289,9 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         setSelectedPlayer(null);
     };
 
-    // --- VISTAS ---
     if (!selectedMatchId) return (
         <div className="animate-fade-in" style={{padding:'40px', maxWidth:'800px', margin:'0 auto'}}>
-            <h2 style={{color:'var(--primary)'}}>📡 Mesa Técnica FIBA Pro</h2>
+            <h2 style={{color:'var(--primary)'}}>📡 Mesa Técnica Pro</h2>
             <div style={{display:'grid', gap:'15px'}}>
                 {matches.map(m => (
                     <div key={m.id} onClick={() => setSelectedMatchId(m.id)} className="card" style={{cursor:'pointer', borderLeft: m.estatus==='vivo'?'5px solid red':'5px solid blue', display:'flex', justifyContent:'space-between'}}>
@@ -339,13 +305,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     );
 
     if (!matchData) return <div style={{padding:'50px', color:'white'}}>Cargando...</div>;
-
+    
     const currentPlayerStats = selectedPlayer ? statsCache[selectedPlayer.player.id] : null;
 
     return (
         <div style={{background:'#121212', minHeight:'100vh', color:'white', display:'flex', flexDirection:'column'}}>
             
-            {/* HEADER (SCOREBOARD) */}
+            {/* HEADER */}
             <header style={{background:'#1e1e1e', padding:'10px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'1px solid #333'}}>
                 <div style={{textAlign:'center', minWidth:'150px'}}>
                     <div style={{color:'#60a5fa', fontWeight:'bold'}}>{matchData.equipoLocalNombre}</div>
@@ -370,10 +336,10 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 </div>
             </header>
 
-            {/* ÁREA DE JUEGO */}
+            {/* AREA CENTRAL */}
             <div style={{flex:1, display:'flex', overflow:'hidden'}}>
                 
-                {/* --- IZQUIERDA: LOCAL --- */}
+                {/* IZQUIERDA */}
                 <div style={{flex:1, borderRight:'1px solid #333', display:'flex', flexDirection:'column', background:'#1a1a1a'}}>
                     <div style={{padding:'10px', background:'#262626', color:'#60a5fa', fontWeight:'bold', textAlign:'center'}}>EN CANCHA</div>
                     <div style={{padding:'10px', overflowY:'auto', flex:1}}>
@@ -389,9 +355,9 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                                         border: selectedPlayer?.player.id === p.id ? '2px solid white' : 'none', opacity: isExpulsado ? 0.6 : 1
                                     }}>
                                     <span style={{fontWeight:'bold'}}>#{p.numero} {p.nombre}</span>
-                                    <div style={{display:'flex', gap:'5px'}}>
-                                        {[...Array(faltas)].map((_,i) => <div key={i} style={{width:'8px', height:'8px', borderRadius:'50%', background: i>=4?'red':'yellow'}}></div>)}
-                                        {isExpulsado && <span style={{fontSize:'0.8rem', color:'red', fontWeight:'bold'}}>EXP</span>}
+                                    <div style={{display:'flex', gap:'3px'}}>
+                                        {[...Array(faltas)].map((_,i) => <div key={i} style={{width:'6px', height:'6px', borderRadius:'50%', background: i>=4?'red':'yellow'}}></div>)}
+                                        {isExpulsado && <span style={{fontSize:'0.7rem', color:'red'}}>EXP</span>}
                                     </div>
                                 </div>
                             );
@@ -402,8 +368,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                         {localBench.map(p => {
                              const isExpulsado = statsCache[p.id]?.expulsado;
                              return (
-                                <button key={p.id} onClick={()=>setSubMode({team:'local', playerIn:p})} disabled={!!subMode || isExpulsado} 
-                                    style={{background: isExpulsado?'#333':'#333', color: isExpulsado?'#555':'#ccc', border:'none', padding:'5px 10px', borderRadius:'4px', cursor: isExpulsado?'not-allowed':'pointer', fontSize:'0.8rem', textDecoration: isExpulsado?'line-through':'none'}}>
+                                <button key={p.id} onClick={()=>setSubMode({team:'local', playerIn:p})} disabled={!!subMode || isExpulsado} style={{background:'#333', color: isExpulsado?'#555':'#ccc', border:'none', padding:'5px 10px', borderRadius:'4px', cursor:'pointer', fontSize:'0.8rem', textDecoration: isExpulsado?'line-through':'none'}}>
                                     #{p.numero} {p.nombre}
                                 </button>
                             );
@@ -411,44 +376,40 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     </div>
                 </div>
 
-                {/* --- CENTRO: PANEL DE CONTROL --- */}
+                {/* CENTRO */}
                 <div style={{width:'320px', background:'#222', display:'flex', flexDirection:'column', borderRight:'1px solid #333'}}>
                     <div style={{padding:'15px', background:'#000', textAlign:'center', borderBottom:'1px solid #444'}}>
                         <div style={{fontSize:'0.8rem', color:'#888'}}>ACCIONES PARA:</div>
                         <div style={{fontSize:'1.2rem', fontWeight:'bold', color:'white', minHeight:'1.5rem'}}>
                             {selectedPlayer ? selectedPlayer.player.nombre : 'Selecciona un Jugador'}
                         </div>
-                        {selectedPlayer && currentPlayerStats && (
-                             <div style={{fontSize:'0.8rem', color: currentPlayerStats.faltasTotales>=4 ? 'red' : '#aaa', marginTop:'5px'}}>
+                         {selectedPlayer && currentPlayerStats && (
+                             <div style={{fontSize:'0.75rem', color: currentPlayerStats.faltasTotales>=4 ? 'red' : '#aaa', marginTop:'5px'}}>
                                 Faltas: {currentPlayerStats.faltasPersonales}P / {currentPlayerStats.faltasTecnicas}T / {currentPlayerStats.faltasAntideportivas}U
                              </div>
                         )}
                     </div>
 
                     <div style={{padding:'15px', display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'8px', flex:1, alignContent:'start'}}>
-                        {/* PUNTOS */}
                         <button onClick={()=>handleStat('puntos', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#fff', color:'#000', fontWeight:'bold'}}>+1</button>
                         <button onClick={()=>handleStat('puntos', 2)} disabled={!selectedPlayer} className="btn" style={{background:'#3b82f6', color:'white', fontWeight:'bold'}}>+2</button>
                         <button onClick={()=>handleStat('puntos', 3)} disabled={!selectedPlayer} className="btn" style={{background:'#eab308', color:'black', fontWeight:'bold'}}>+3</button>
                         
                         <hr style={{gridColumn:'span 3', borderColor:'#444', width:'100%', margin:'5px 0'}}/>
                         
-                        {/* ESTADÍSTICAS */}
                         <button onClick={()=>handleStat('rebotes', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#10b981', color:'white', fontSize:'0.8rem'}}>REB</button>
                         <button onClick={()=>handleStat('asistencias', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#8b5cf6', color:'white', fontSize:'0.8rem'}}>ASIST</button>
                         <button onClick={()=>handleStat('robos', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#f97316', color:'white', fontSize:'0.8rem'}}>ROBO</button>
-                        <button onClick={()=>handleStat('bloqueos', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#64748b', color:'white', fontSize:'0.8rem', gridColumn:'span 3'}}>BLOQUEO / TAPÓN</button>
+                        <button onClick={()=>handleStat('bloqueos', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#64748b', color:'white', fontSize:'0.8rem', gridColumn:'span 3'}}>TAPÓN / BLOQUEO</button>
                         
                         <hr style={{gridColumn:'span 3', borderColor:'#444', width:'100%', margin:'5px 0'}}/>
                         
-                        {/* FALTAS */}
                         <button onClick={()=>handleStat('falta_P', 0)} disabled={!selectedPlayer} className="btn" style={{background:'#dc2626', color:'white', fontWeight:'bold'}}>P</button>
                         <button onClick={()=>handleStat('falta_T', 0)} disabled={!selectedPlayer} className="btn" style={{background:'#be123c', color:'white', fontWeight:'bold'}}>T</button>
                         <button onClick={()=>handleStat('falta_U', 0)} disabled={!selectedPlayer} className="btn" style={{background:'#7f1d1d', color:'white', fontWeight:'bold'}}>U</button>
                         <div style={{gridColumn:'span 3', textAlign:'center', fontSize:'0.7rem', color:'#666'}}>P: Personal | T: Técnica | U: Antideportiva</div>
                     </div>
 
-                    {/* LOG */}
                     <div style={{height:'180px', background:'#000', overflowY:'auto', padding:'10px', fontSize:'0.75rem'}}>
                         {matchData.gameLog?.map((log) => (
                             <div key={log.id} style={{color: log.team==='local'?'#60a5fa': log.team==='visitante'?'#fbbf24':'#ccc', marginBottom:'2px', borderBottom:'1px solid #222', paddingBottom:'2px'}}>
@@ -458,7 +419,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     </div>
                 </div>
 
-                {/* --- DERECHA: VISITANTE --- */}
+                {/* DERECHA */}
                 <div style={{flex:1, display:'flex', flexDirection:'column', background:'#1a1a1a'}}>
                     <div style={{padding:'10px', background:'#262626', color:'#fbbf24', fontWeight:'bold', textAlign:'center'}}>EN CANCHA</div>
                     <div style={{padding:'10px', overflowY:'auto', flex:1}}>
@@ -470,13 +431,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                                     style={{
                                         padding:'12px', marginBottom:'8px', borderRadius:'6px', cursor: isExpulsado ? 'not-allowed' : 'pointer',
                                         background: isExpulsado ? '#450a0a' : selectedPlayer?.player.id === p.id ? '#eab308' : subMode?.team==='visitante' ? '#dc2626' : '#333',
-                                        color: isExpulsado ? '#999' : selectedPlayer?.player.id === p.id ? 'black' : 'white', display:'flex', justifyContent:'space-between', alignItems:'center',
+                                        color: isExpulsado ? '#999' : 'white', display:'flex', justifyContent:'space-between', alignItems:'center',
                                         border: selectedPlayer?.player.id === p.id ? '2px solid white' : 'none', opacity: isExpulsado ? 0.6 : 1
                                     }}>
                                     <span style={{fontWeight:'bold'}}>#{p.numero} {p.nombre}</span>
-                                    <div style={{display:'flex', gap:'5px'}}>
-                                        {[...Array(faltas)].map((_,i) => <div key={i} style={{width:'8px', height:'8px', borderRadius:'50%', background: i>=4?'red':'yellow'}}></div>)}
-                                        {isExpulsado && <span style={{fontSize:'0.8rem', color:'red', fontWeight:'bold'}}>EXP</span>}
+                                    <div style={{display:'flex', gap:'3px'}}>
+                                        {[...Array(faltas)].map((_,i) => <div key={i} style={{width:'6px', height:'6px', borderRadius:'50%', background: i>=4?'red':'yellow'}}></div>)}
+                                        {isExpulsado && <span style={{fontSize:'0.7rem', color:'red'}}>EXP</span>}
                                     </div>
                                 </div>
                             );
@@ -487,8 +448,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                         {visitanteBench.map(p => {
                              const isExpulsado = statsCache[p.id]?.expulsado;
                              return (
-                                <button key={p.id} onClick={()=>setSubMode({team:'visitante', playerIn:p})} disabled={!!subMode || isExpulsado} 
-                                    style={{background: isExpulsado?'#333':'#333', color: isExpulsado?'#555':'#ccc', border:'none', padding:'5px 10px', borderRadius:'4px', cursor: isExpulsado?'not-allowed':'pointer', fontSize:'0.8rem', textDecoration: isExpulsado?'line-through':'none'}}>
+                                <button key={p.id} onClick={()=>setSubMode({team:'visitante', playerIn:p})} disabled={!!subMode || isExpulsado} style={{background:'#333', color: isExpulsado?'#555':'#ccc', border:'none', padding:'5px 10px', borderRadius:'4px', cursor:'pointer', fontSize:'0.8rem', textDecoration: isExpulsado?'line-through':'none'}}>
                                     #{p.numero} {p.nombre}
                                 </button>
                             );
@@ -497,7 +457,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 </div>
             </div>
 
-            {/* MENSAJE DE SUSTITUCIÓN */}
+            {/* SUSTITUCIÓN MSG */}
             {subMode && (
                 <div style={{background:'#dc2626', color:'white', textAlign:'center', padding:'10px', fontWeight:'bold'}}>
                     🔄 CAMBIO: Haz click en el jugador en cancha que SALE por {subMode.playerIn.nombre}
