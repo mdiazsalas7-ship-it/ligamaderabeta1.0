@@ -1,327 +1,515 @@
-import React, { useState, useEffect, useRef } from 'react'; 
+import React, { useState, useEffect, useRef } from 'react';
 import { db } from './firebase';
-import { collection, getDocs, doc, updateDoc, addDoc, setDoc, deleteDoc, query, orderBy, where, getDoc, writeBatch, increment } from 'firebase/firestore'; 
-import type { DocumentData } from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot, collection, query, getDocs, setDoc, increment, getDoc } from 'firebase/firestore';
 
-const COURT_BG_URL = "https://i.postimg.cc/3R98dqnk/basketball-court-black-line-marking-260nw-2125177724.webp"; 
-const BUZZER_SOUND_URL = "https://actions.google.com/sounds/v1/alarms/buzzer_and_audience.ogg"; 
+// --- INTERFACES ---
+interface Player { id: string; nombre: string; numero: number; equipoId: string; }
+interface GameEvent { id: string; text: string; time: string; team: 'local'|'visitante'|'system'; type: 'score'|'stat'|'foul'|'sub'; }
+interface PlayerGameStats {
+    puntos: number;
+    faltasPersonales: number;
+    faltasTecnicas: number;
+    faltasAntideportivas: number;
+    faltasTotales: number; // Suma de P + T + U
+    expulsado: boolean;
+}
 
-interface Match extends DocumentData { id: string; jornada: number; equipoLocalNombre: string; equipoVisitanteNombre: string; equipoLocalId: string; equipoVisitanteId: string; partidoRegistradoId: string | null; marcadorLocal: number; marcadorVisitante: number; forma5?: { [equipoId: string]: JugadorForma5[] }; }
-interface JugadorForma5 { id: string; nombre: string; numero: number; equipoId: string; }
-interface StatEvent extends DocumentData { id: string; calendarioId: string; equipoId: string; jugadorId: string; jugadorNombre: string; jugadorNumero: number; puntos: number; tipo: 'PUNTO' | 'REBOTE' | 'ASISTENCIA' | 'ROBO' | 'FALTA_P' | 'FALTA_T' | 'FALTA_U' | 'CAMBIO'; timestamp: Date | string; cuarto: number; tiempoJuego: string; detalles?: string; }
-interface FoulBreakdown { total: number; tech: number; unsport: number; }
-interface MesaTecnicaProps { onClose: () => void; onMatchFinalized?: () => void; }
+interface MatchData {
+    id: string;
+    equipoLocalId: string; equipoLocalNombre: string;
+    equipoVisitanteId: string; equipoVisitanteNombre: string;
+    marcadorLocal: number; marcadorVisitante: number;
+    cuarto: number; estatus: string;
+    forma5?: Record<string, Player[]>; 
+    faltasLocal: number; faltasVisitante: number;
+    gameLog?: GameEvent[];
+}
 
-const QUARTER_TIME_MS = 10 * 60 * 1000;
-const OT_TIME_MS = 5 * 60 * 1000;
-const INTERVAL_MS = 100; 
+const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void }> = ({ onClose, onMatchFinalized }) => {
+    // ESTADOS DE DATOS
+    const [matches, setMatches] = useState<any[]>([]);
+    const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+    const [matchData, setMatchData] = useState<MatchData | null>(null);
+    
+    // ROSTERS Y JUEGO
+    const [localOnCourt, setLocalOnCourt] = useState<Player[]>([]);
+    const [localBench, setLocalBench] = useState<Player[]>([]);
+    const [visitanteOnCourt, setVisitanteOnCourt] = useState<Player[]>([]);
+    const [visitanteBench, setVisitanteBench] = useState<Player[]>([]);
+    
+    // ESTADÍSTICAS EN TIEMPO REAL (Para controlar expulsiones localmente)
+    const [statsCache, setStatsCache] = useState<Record<string, PlayerGameStats>>({});
 
-const formatTime = (totalMilliseconds: number): string => {
-    const totalSeconds = Math.floor(totalMilliseconds / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    const decimas = Math.floor((totalMilliseconds % 1000) / 100); 
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${decimas}`;
-};
-
-const checkDisqualification = (stats: FoulBreakdown | undefined): { isExpelled: boolean, reason: string } => {
-    if (!stats) return { isExpelled: false, reason: '' };
-    if (stats.total >= 5) return { isExpelled: true, reason: '5 FALTAS' };
-    if (stats.tech >= 2) return { isExpelled: true, reason: '2 TÉCNICAS' };
-    if (stats.unsport >= 2) return { isExpelled: true, reason: '2 ANTIDEP.' };
-    if (stats.tech >= 1 && stats.unsport >= 1) return { isExpelled: true, reason: '1T + 1U' };
-    return { isExpelled: false, reason: '' };
-};
-
-const calculateMVP = async (calendarioId: string) => {
-    const statsQuery = query(collection(db, 'stats_partido'), where('calendarioId', '==', calendarioId));
-    const statsSnapshot = await getDocs(statsQuery);
-    const playerStatsMap = new Map();
-
-    statsSnapshot.docs.forEach(doc => {
-        const data = doc.data();
-        if (data.tipo.startsWith('FALTA') || data.tipo === 'CAMBIO') return; 
-        if (!playerStatsMap.has(data.jugadorId)) playerStatsMap.set(data.jugadorId, { jugadorId: data.jugadorId, jugadorNombre: data.jugadorNombre, jugadorNumero: data.jugadorNumero, equipoId: data.equipoId, puntos: 0, rebotes: 0, asistencias: 0, robos: 0, valoracion: 0 });
-        const stats = playerStatsMap.get(data.jugadorId);
-        if (data.tipo === 'PUNTO') stats.puntos += Number(data.puntos);
-        if (data.tipo === 'REBOTE') stats.rebotes += 1;
-        if (data.tipo === 'ASISTENCIA') stats.asistencias += 1;
-        if (data.tipo === 'ROBO') stats.robos += 1;
-    });
-
-    let mvpId: string | null = null; 
-    let maxValoracion = -Infinity;
-    const finalStatsArray = Array.from(playerStatsMap.values()).map(stats => {
-        stats.valoracion = stats.puntos + stats.rebotes + stats.asistencias + stats.robos;
-        if (stats.valoracion > maxValoracion) { maxValoracion = stats.valoracion; mvpId = stats.jugadorId; }
-        return stats;
-    });
-    return { stats: finalStatsArray, mvpId, mvpData: finalStatsArray.find(s => s.jugadorId === mvpId) };
-};
-
-const updateStandingsAutomatically = async (equipoId: string, puntosFavor: number, puntosContra: number, isWinner: boolean) => {
-    const equipoRef = doc(db, 'equipos', equipoId);
-    const puntosClasificacion = isWinner ? 2 : 1; 
-    await updateDoc(equipoRef, { jugados: increment(1), victorias: increment(isWinner ? 1 : 0), derrotas: increment(isWinner ? 0 : 1), puntos_favor: increment(puntosFavor), puntos_contra: increment(puntosContra), puntos: increment(puntosClasificacion) });
-};
-
-const ScoreBoard = React.memo(({ selectedMatch, marcadorLocal, marcadorVisitante, localTeamFouls, visitanteTeamFouls, currentQuarter, time, isRunning, setIsRunning, adjustTime, handleQuarterChange }: any) => {
-    const localBonus = localTeamFouls >= 5; const visitanteBonus = visitanteTeamFouls >= 5;
-    return (
-        <div style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.8), rgba(0,0,0,0.8)), url("${COURT_BG_URL}")`, backgroundSize: 'cover', backgroundPosition: 'center', color: '#fff', padding: '15px', borderRadius: '16px', marginBottom: '20px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', border: '2px solid #333', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 2 }}>
-                <div style={{ textAlign: 'center', flex: 1 }}><h2 style={{ margin: 0, color: '#fbbf24', fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '1px' }}>{selectedMatch?.equipoLocalNombre}</h2><div style={{ fontFamily: "'Courier New', monospace", fontSize: '3.5rem', fontWeight: 'bold', color: '#ef4444', lineHeight: 1, textShadow: '0 0 20px rgba(239, 68, 68, 0.5)' }}>{marcadorLocal}</div><div style={{ color: '#9ca3af', fontSize: '0.8rem', marginTop: '5px' }}>FALTAS: <span style={{ color: localBonus ? '#ef4444' : '#4ade80', fontWeight: 'bold', fontSize: '1.1rem' }}>{localTeamFouls}</span></div>{localBonus && <div className="badge badge-danger" style={{marginTop: '5px'}}>BONUS</div>}</div>
-                <div style={{ textAlign: 'center', flex: 1.2, padding: '0 10px', borderLeft: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid rgba(255,255,255,0.1)' }}><div style={{ fontSize: '1rem', color: '#4ade80', marginBottom: '2px', textTransform: 'uppercase', letterSpacing: '2px' }}>CUARTO {currentQuarter > 4 ? `OT ${currentQuarter - 4}` : currentQuarter}</div><div style={{ fontFamily: "'Courier New', monospace", fontSize: '4rem', color: time === 0 ? '#ef4444' : '#fff', fontWeight: 'bold', letterSpacing: '2px', textShadow: '0 0 10px rgba(255,255,255,0.3)' }}>{formatTime(time)}</div><div style={{ display: 'flex', justifyContent: 'center', gap: '5px', marginBottom: '10px' }}><button onClick={() => adjustTime(1)} className="btn-time-compact">+1s</button><button onClick={() => adjustTime(-1)} className="btn-time-compact">-1s</button><button onClick={() => adjustTime(60)} className="btn-time-compact">+1m</button><button onClick={() => adjustTime(-60)} className="btn-time-compact">-1m</button></div><div style={{ display: 'flex', justifyContent: 'center', gap: '10px' }}><button onClick={() => setIsRunning(!isRunning)} className={`btn ${isRunning ? 'btn-danger' : 'btn-success'}`} style={{padding: '8px 20px', minWidth: '100px'}}>{isRunning ? 'PAUSAR' : 'INICIAR'}</button><button onClick={handleQuarterChange} className="btn btn-secondary" style={{padding: '8px 15px', background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)'}} disabled={isRunning}>SIG. CUARTO</button></div></div>
-                <div style={{ textAlign: 'center', flex: 1 }}><h2 style={{ margin: 0, color: '#fbbf24', fontSize: '1.1rem', textTransform: 'uppercase', letterSpacing: '1px' }}>{selectedMatch?.equipoVisitanteNombre}</h2><div style={{ fontFamily: "'Courier New', monospace", fontSize: '3.5rem', fontWeight: 'bold', color: '#ef4444', lineHeight: 1, textShadow: '0 0 20px rgba(239, 68, 68, 0.5)' }}>{marcadorVisitante}</div><div style={{ color: '#9ca3af', fontSize: '0.8rem', marginTop: '5px' }}>FALTAS: <span style={{ color: visitanteBonus ? '#ef4444' : '#4ade80', fontWeight: 'bold', fontSize: '1.1rem' }}>{visitanteTeamFouls}</span></div>{visitanteBonus && <div className="badge badge-danger" style={{marginTop: '5px'}}>BONUS</div>}</div>
-            </div>
-        </div>
-    );
-});
-
-const PlayerCard = React.memo(({ player, isLocal, foulStats, points, recordEvent }: any) => {
-    const { isExpelled, reason } = checkDisqualification(foulStats);
-    const fouls = foulStats ? foulStats.total : 0;
-    return (
-        <div style={{ background: isExpelled ? '#fef2f2' : 'white', opacity: isExpelled ? 0.6 : 1, borderLeft: `4px solid ${isExpelled ? '#6b7280' : (isLocal ? 'var(--primary)' : 'var(--danger)')}`, borderRadius: '8px', padding: '8px 10px', marginBottom: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', position: 'relative' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}><div style={{fontWeight: '600', fontSize: '0.9rem', color: '#1f2937', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px', textDecoration: isExpelled ? 'line-through' : 'none'}}>#{player.numero} {player.nombre}</div><div style={{fontSize: '0.8rem', color: '#6b7280', fontWeight: '600'}}>Pts: <span style={{color: 'var(--text-main)'}}>{points}</span> | F: <span style={{color: fouls>=4?'#ef4444':'inherit'}}>{fouls}</span></div></div>
-            {isExpelled && <div style={{position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, color: '#ef4444', fontWeight: 'bold', fontSize: '0.85rem', transform: 'rotate(-2deg)', textShadow: '0 0 5px white', pointerEvents: 'none'}}>EXPULSADO ({reason})</div>}
-            <div style={{ display: 'flex', gap: '4px', marginBottom: '4px' }}><button onClick={() => recordEvent(player, 'PUNTO', 1)} disabled={isExpelled} className="btn-action-compact" style={{background: '#ecfccb', color: '#365314', border: '1px solid #bef264'}}>+1</button><button onClick={() => recordEvent(player, 'PUNTO', 2)} disabled={isExpelled} className="btn-action-compact" style={{background: '#dbeafe', color: '#1e3a8a', border: '1px solid #bfdbfe'}}>+2</button><button onClick={() => recordEvent(player, 'PUNTO', 3)} disabled={isExpelled} className="btn-action-compact" style={{background: '#ffedd5', color: '#7c2d12', border: '1px solid #fed7aa'}}>+3</button></div>
-            <div style={{ display: 'flex', gap: '4px' }}><button onClick={() => recordEvent(player, 'FALTA_P')} disabled={isExpelled} className="btn-action-compact" style={{background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb'}}>P</button><button onClick={() => recordEvent(player, 'FALTA_T')} disabled={isExpelled} className="btn-action-compact" style={{background: '#e0e7ff', color: '#3730a3', border: '1px solid #c7d2fe'}}>T</button><button onClick={() => recordEvent(player, 'FALTA_U')} disabled={isExpelled} className="btn-action-compact" style={{background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca'}}>U</button><div style={{width: '1px', background: '#e5e7eb', margin: '0 2px'}}></div><button onClick={() => recordEvent(player, 'REBOTE', 0)} disabled={isExpelled} className="btn-action-compact btn-stat">Rb</button><button onClick={() => recordEvent(player, 'ASISTENCIA', 0)} disabled={isExpelled} className="btn-action-compact btn-stat">As</button><button onClick={() => recordEvent(player, 'ROBO', 0)} disabled={isExpelled} className="btn-action-compact btn-stat">Ro</button></div>
-        </div>
-    );
-});
-
-const SubstitutionModal = ({ showSubsModal, localRoster, visitanteRoster, localOnCourt, visitanteOnCourt, selectedMatch, handleSubstitution, setShowSubsModal, localPlayerFouls, visitantePlayerFouls }: any) => {
-    if (!showSubsModal) return null;
-    const isLocal = showSubsModal === 'local';
-    const teamRoster = isLocal ? localRoster : visitanteRoster;
-    const onCourtIds = isLocal ? localOnCourt : visitanteOnCourt;
-    const foulsMap = isLocal ? localPlayerFouls : visitantePlayerFouls;
-    const benchPlayers = teamRoster.filter((p: any) => !onCourtIds.includes(p.id));
-    const courtPlayers = teamRoster.filter((p: any) => onCourtIds.includes(p.id));
-    return (
-        <div className="modal-overlay">
-            <div className="modal-content animate-fade-in"><h3 style={{marginTop: 0, fontSize: '1.2rem', borderBottom: '1px solid #eee', paddingBottom: '15px', color: 'var(--primary)'}}>🔄 Sustitución: {isLocal ? selectedMatch?.equipoLocalNombre : selectedMatch?.equipoVisitanteNombre}</h3><div style={{ maxHeight: '300px', overflowY: 'auto', margin: '15px 0' }}>{benchPlayers.map((p: any) => { const foulStats = foulsMap.get(p.id); const { isExpelled, reason } = checkDisqualification(foulStats); return (<div key={p.id} style={{ padding: '10px 0', borderBottom: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: isExpelled ? 0.5 : 1 }}><div><span style={{fontWeight: 'bold', fontSize: '1rem'}}>#{p.numero} {p.nombre}</span>{isExpelled && <span style={{marginLeft: '8px', fontSize: '0.75rem', color: 'red', fontWeight: 'bold'}}>{reason}</span>}</div>{isExpelled ? <span className="badge badge-danger">BLOQUEADO</span> : (<select onChange={(e) => { if (e.target.value) handleSubstitution(showSubsModal, p.id, e.target.value); }} defaultValue="" style={{ marginLeft: '10px', padding: '8px', borderRadius: '8px', border: '1px solid #d1d5db', fontSize: '0.9rem', width: '160px', marginBottom: 0 }}><option value="" disabled>Entra por...</option>{courtPlayers.map((out: any) => <option key={out.id} value={out.id}>Sale: #{out.numero} {out.nombre}</option>)}</select>)}</div>);})}</div><button onClick={() => setShowSubsModal(null)} className="btn btn-secondary" style={{ width: '100%' }}>Cerrar Banca</button></div>
-        </div>
-    );
-};
-
-const MesaTecnica: React.FC<MesaTecnicaProps> = ({ onClose, onMatchFinalized }) => {
-    const [availableMatches, setAvailableMatches] = useState<Match[]>([]);
-    const [selectedMatch, setSelectedMatch] = useState<Match | null>(null);
-    const [localRoster, setLocalRoster] = useState<JugadorForma5[]>([]);
-    const [visitanteRoster, setVisitanteRoster] = useState<JugadorForma5[]>([]);
-    const [localOnCourt, setLocalOnCourt] = useState<string[]>([]);
-    const [visitanteOnCourt, setVisitanteOnCourt] = useState<string[]>([]);
-    const [showSubsModal, setShowSubsModal] = useState<'local' | 'visitante' | null>(null);
-    const [marcadorLocal, setMarcadorLocal] = useState(0);
-    const [marcadorVisitante, setMarcadorVisitante] = useState(0);
-    const [currentQuarter, setCurrentQuarter] = useState(1);
-    const [jugadasRecientes, setJugadasRecientes] = useState<StatEvent[]>([]); 
-    const [time, setTime] = useState(QUARTER_TIME_MS);
+    // RELOJ
+    const [timeLeft, setTimeLeft] = useState(6000); 
     const [isRunning, setIsRunning] = useState(false);
-    const intervalRef = useRef<number | null>(null); 
-    const buzzerAudio = useRef<HTMLAudioElement | null>(null);
-    const [localPlayerFouls, setLocalPlayerFouls] = useState<Map<string, FoulBreakdown>>(new Map());
-    const [visitantePlayerFouls, setVisitantePlayerFouls] = useState<Map<string, FoulBreakdown>>(new Map());
-    const [localTeamFouls, setLocalTeamFouls] = useState(0);
-    const [visitanteTeamFouls, setVisitanteTeamFouls] = useState(0);
-    const [playerPoints, setPlayerPoints] = useState<Map<string, number>>(new Map());
+    const timerRef = useRef<any>(null);
 
-    useEffect(() => { buzzerAudio.current = new Audio(BUZZER_SOUND_URL); }, []);
+    // INTERACCIÓN
+    const [selectedPlayer, setSelectedPlayer] = useState<{player: Player, team: 'local'|'visitante'} | null>(null);
+    const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
 
+    // 1. CARGAR LISTA DE JUEGOS
     useEffect(() => {
-        const fetchAvailableMatches = async () => {
-            try {
-                const snapshot = await getDocs(collection(db, 'calendario'));
-                const matchesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Match[];
-                const ready = matchesData.filter(m => !m.partidoRegistradoId && m.forma5);
-                setAvailableMatches(ready.sort((a,b) => a.jornada - b.jornada));
-            } catch (err) { console.error(err); }
+        const fetchMatches = async () => {
+            const q = query(collection(db, 'calendario')); 
+            const snap = await getDocs(q);
+            const pendingMatches = snap.docs
+                .map(d => ({ id: d.id, ...d.data() } as any))
+                .filter(m => m.estatus === 'programado' || m.estatus === 'vivo')
+                .sort((a,b) => a.fechaAsignada.localeCompare(b.fechaAsignada));
+            setMatches(pendingMatches);
         };
-        fetchAvailableMatches();
-    }, []);
+        if (!selectedMatchId) fetchMatches();
+    }, [selectedMatchId]);
 
+    // 2. RELOJ (DÉCIMAS)
     useEffect(() => {
-        if (!selectedMatch) return;
-        const loadData = async () => {
-            try {
-                const matchDoc = await getDoc(doc(db, 'calendario', selectedMatch.id));
-                if (matchDoc.exists()) {
-                    const data = matchDoc.data();
-                    setMarcadorLocal(data.marcadorLocal || 0);
-                    setMarcadorVisitante(data.marcadorVisitante || 0);
-                    const lRoster = data.forma5?.[selectedMatch.equipoLocalId] || [];
-                    const vRoster = data.forma5?.[selectedMatch.equipoVisitanteId] || [];
-                    lRoster.sort((a: any, b: any) => a.numero - b.numero);
-                    vRoster.sort((a: any, b: any) => a.numero - b.numero);
-                    setLocalRoster(lRoster);
-                    setVisitanteRoster(vRoster);
-                    if (localOnCourt.length === 0) setLocalOnCourt(lRoster.slice(0, 5).map((p:any) => p.id));
-                    if (visitanteOnCourt.length === 0) setVisitanteOnCourt(vRoster.slice(0, 5).map((p:any) => p.id));
-                }
-                const q = query(collection(db, 'stats_partido'), where('calendarioId', '==', selectedMatch.id), orderBy('timestamp', 'asc'));
-                const snap = await getDocs(q);
-                const log = snap.docs.map(d => ({id: d.id, ...d.data()})) as StatEvent[];
-                rebuildStats(log, selectedMatch.equipoLocalId, currentQuarter);
-                setJugadasRecientes(log.reverse());
-            } catch (e) { console.error(e); }
-        };
-        loadData();
-    }, [selectedMatch, currentQuarter]);
-
-    const rebuildStats = (log: StatEvent[], localId: string, quarter: number) => {
-        const lFouls = new Map<string, FoulBreakdown>();
-        const vFouls = new Map<string, FoulBreakdown>();
-        const pts = new Map();
-        let lTeamF = 0; let vTeamF = 0;
-        log.forEach(s => {
-            if (s.tipo === 'PUNTO') pts.set(s.jugadorId, (pts.get(s.jugadorId) || 0) + s.puntos);
-            if (s.tipo.startsWith('FALTA') && s.jugadorNombre !== 'ENTRENADOR') {
-                const isLocal = s.equipoId === localId;
-                const map = isLocal ? lFouls : vFouls;
-                const stats = map.get(s.jugadorId) || { total: 0, tech: 0, unsport: 0 };
-                stats.total += 1; if (s.tipo === 'FALTA_T') stats.tech += 1; if (s.tipo === 'FALTA_U') stats.unsport += 1;
-                map.set(s.jugadorId, stats);
-                if (s.cuarto === quarter) { isLocal ? lTeamF++ : vTeamF++; }
-            }
-        });
-        setLocalPlayerFouls(lFouls); setVisitantePlayerFouls(vFouls); setLocalTeamFouls(lTeamF); setVisitanteTeamFouls(vTeamF); setPlayerPoints(pts);
-    };
-
-    useEffect(() => {
-        if (isRunning) {
-            intervalRef.current = setInterval(() => {
-                setTime(prevTime => {
-                    if (prevTime <= 0) { setIsRunning(false); if (buzzerAudio.current) { buzzerAudio.current.currentTime = 0; buzzerAudio.current.play().catch(e => console.log(e)); } return 0; }
-                    return prevTime - INTERVAL_MS;
+        if (isRunning && timeLeft > 0) {
+            timerRef.current = setInterval(() => {
+                setTimeLeft((prev) => {
+                    if (prev <= 1) { setIsRunning(false); return 0; }
+                    return prev - 1;
                 });
-            }, INTERVAL_MS) as unknown as number;
-        } else { if (intervalRef.current) clearInterval(intervalRef.current); }
-        return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+            }, 100);
+        } else { clearInterval(timerRef.current); }
+        return () => clearInterval(timerRef.current);
     }, [isRunning]);
 
-    const handleQuarterChange = () => { setIsRunning(false); if(!window.confirm("¿Cambiar cuarto?")) return; setCurrentQuarter(prev => { const next = prev + 1; setTime(next <= 4 ? QUARTER_TIME_MS : OT_TIME_MS); setLocalTeamFouls(0); setVisitanteTeamFouls(0); return next; }); };
-    const adjustTime = (seconds: number) => { setTime(prev => Math.max(0, prev + (seconds * 1000))); };
-    
-    const handleResetMatch = async () => {
-        if (!selectedMatch || !window.confirm("⚠️ REINICIAR? Se borrará todo.")) return;
-        setIsRunning(false);
-        const q = query(collection(db, 'stats_partido'), where('calendarioId', '==', selectedMatch.id));
-        const snapshot = await getDocs(q);
-        const batch = writeBatch(db);
-        snapshot.docs.forEach(doc => batch.delete(doc.ref));
-        batch.update(doc(db, 'calendario', selectedMatch.id), { marcadorLocal: 0, marcadorVisitante: 0 });
-        await batch.commit();
-        setMarcadorLocal(0); setMarcadorVisitante(0); setCurrentQuarter(1); setTime(QUARTER_TIME_MS);
-        setLocalPlayerFouls(new Map()); setVisitantePlayerFouls(new Map()); setLocalTeamFouls(0); setVisitanteTeamFouls(0); setPlayerPoints(new Map()); setJugadasRecientes([]);
+    const formatTime = (tenths: number) => {
+        if (tenths === 0) return "00:00";
+        const totalSeconds = Math.floor(tenths / 10);
+        const mins = Math.floor(totalSeconds / 60);
+        const secs = totalSeconds % 60;
+        const dec = tenths % 10;
+        if (mins === 0) return `${secs}.${dec}`;
+        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     };
 
-    const recordEvent = async (jugador: JugadorForma5, tipo: string, puntos = 0) => {
-        if (!selectedMatch) return;
-        const isLocal = jugador.equipoId === selectedMatch.equipoLocalId;
+    // 3. ESCUCHAR PARTIDO Y STATS INICIALES
+    useEffect(() => {
+        if (!selectedMatchId) return;
+        const unsub = onSnapshot(doc(db, 'calendario', selectedMatchId), (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data() as any;
+                setMatchData({
+                    id: docSnap.id,
+                    equipoLocalId: data.equipoLocalId || Object.keys(data.forma5||{})[0],
+                    equipoLocalNombre: data.equipoLocalNombre,
+                    equipoVisitanteId: data.equipoVisitanteId || Object.keys(data.forma5||{})[1],
+                    equipoVisitanteNombre: data.equipoVisitanteNombre,
+                    marcadorLocal: data.marcadorLocal || 0,
+                    marcadorVisitante: data.marcadorVisitante || 0,
+                    cuarto: data.cuarto || 1,
+                    estatus: data.estatus || 'programado',
+                    forma5: data.forma5 || {},
+                    faltasLocal: data.faltasLocal || 0,
+                    faltasVisitante: data.faltasVisitante || 0,
+                    gameLog: data.gameLog || []
+                });
+            }
+        });
+        return () => unsub();
+    }, [selectedMatchId]);
+
+    // 4. INICIALIZAR ROSTERS
+    useEffect(() => {
+        if (matchData && localOnCourt.length === 0 && localBench.length === 0) {
+            const rosterL = matchData.forma5?.[matchData.equipoLocalId] || [];
+            const rosterV = matchData.forma5?.[matchData.equipoVisitanteId] || [];
+            setLocalOnCourt(rosterL.slice(0, 5));
+            setLocalBench(rosterL.slice(5));
+            setVisitanteOnCourt(rosterV.slice(0, 5));
+            setVisitanteBench(rosterV.slice(5));
+            
+            // Inicializar caché de stats en 0
+            const cache: Record<string, PlayerGameStats> = {};
+            [...rosterL, ...rosterV].forEach(p => {
+                cache[p.id] = { puntos: 0, faltasPersonales: 0, faltasTecnicas: 0, faltasAntideportivas: 0, faltasTotales: 0, expulsado: false };
+            });
+            setStatsCache(cache);
+        }
+    }, [matchData?.id]);
+
+    // --- LÓGICA DE JUEGO ---
+
+    const addLog = async (text: string, type: GameEvent['type'], team: 'local'|'visitante'|'system') => {
+        if (!matchData) return;
+        const newEvent: GameEvent = {
+            id: Date.now().toString(), text, time: formatTime(timeLeft), team, type
+        };
+        const newLog = [newEvent, ...(matchData.gameLog || [])].slice(0, 60);
+        await updateDoc(doc(db, 'calendario', matchData.id), { gameLog: newLog });
+    };
+
+    const checkExpulsion = (stats: PlayerGameStats) => {
+        // REGLAS DE EXPULSIÓN FIBA:
+        // 1. 5 Faltas Totales (Personales + Técnicas + Antideportivas)
+        // 2. 2 Faltas Técnicas
+        // 3. 2 Faltas Antideportivas
+        // 4. 1 Técnica + 1 Antideportiva
+        if (
+            stats.faltasTotales >= 5 || 
+            stats.faltasTecnicas >= 2 || 
+            stats.faltasAntideportivas >= 2 || 
+            (stats.faltasTecnicas >= 1 && stats.faltasAntideportivas >= 1)
+        ) {
+            return true;
+        }
+        return false;
+    };
+
+    const handleStat = async (action: 'puntos'|'rebotes'|'asistencias'|'robos'|'bloqueos'|'falta_P'|'falta_T'|'falta_U', val: number) => {
+        if (!matchData || !selectedPlayer) return;
+        const { player, team } = selectedPlayer;
         
-        if (tipo === 'PUNTO') {
-            const newLocal = isLocal ? marcadorLocal + puntos : marcadorLocal;
-            const newVisit = !isLocal ? marcadorVisitante + puntos : marcadorVisitante;
-            setMarcadorLocal(newLocal); setMarcadorVisitante(newVisit);
-            setPlayerPoints(prev => new Map(prev).set(jugador.id, (prev.get(jugador.id) || 0) + puntos));
-            updateDoc(doc(db, 'calendario', selectedMatch.id), { marcadorLocal: newLocal, marcadorVisitante: newVisit });
+        // Verificar si ya estaba expulsado (por seguridad)
+        if (statsCache[player.id]?.expulsado) {
+            alert("⛔ Este jugador está expulsado.");
+            return;
         }
+
+        const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
         
-        if (tipo.startsWith('FALTA')) {
-            const map = isLocal ? localPlayerFouls : visitantePlayerFouls;
-            const currentStats = map.get(jugador.id) || { total: 0, tech: 0, unsport: 0 };
-            const newStats = { ...currentStats }; newStats.total += 1;
-            if (tipo === 'FALTA_T') newStats.tech += 1; if (tipo === 'FALTA_U') newStats.unsport += 1;
-            if (isLocal) setLocalPlayerFouls(new Map(localPlayerFouls).set(jugador.id, newStats)); else setVisitantePlayerFouls(new Map(visitantePlayerFouls).set(jugador.id, newStats));
-            if (isLocal && localTeamFouls < 5) setLocalTeamFouls(f => f + 1); if (!isLocal && visitanteTeamFouls < 5) setVisitanteTeamFouls(f => f + 1);
+        // 1. Actualizar Caché Local y Verificar Expulsión
+        const currentStats = statsCache[player.id] || { puntos:0, faltasPersonales:0, faltasTecnicas:0, faltasAntideportivas:0, faltasTotales:0, expulsado:false };
+        let newStats = { ...currentStats };
+        let logText = '';
+        let updateGlobalScore = false;
+        let updateGlobalFoul = false;
+        let statField = ''; // Campo para stats_partido
+
+        // CLASIFICAR ACCIÓN
+        if (action === 'puntos') {
+            newStats.puntos += val;
+            updateGlobalScore = true;
+            logText = `🏀 ${player.nombre} (+${val})`;
+            statField = 'puntos';
+        } 
+        else if (action.startsWith('falta')) {
+            updateGlobalFoul = true;
+            newStats.faltasTotales += 1;
+            
+            if (action === 'falta_P') {
+                newStats.faltasPersonales += 1;
+                logText = `🤜 Falta Personal: ${player.nombre}`;
+                statField = 'faltas';
+            } else if (action === 'falta_T') {
+                newStats.faltasTecnicas += 1;
+                logText = `⚠️ Falta TÉCNICA: ${player.nombre}`;
+                statField = 'faltas'; // Se puede separar si la BD lo soporta, por ahora cuenta como falta general
+            } else if (action === 'falta_U') {
+                newStats.faltasAntideportivas += 1;
+                logText = `🛑 Falta ANTIDEPORTIVA: ${player.nombre}`;
+                statField = 'faltas';
+            }
+
+            // Chequear Expulsión
+            if (checkExpulsion(newStats)) {
+                newStats.expulsado = true;
+                logText += " (EXPULSADO 🟥)";
+                alert(`🟥 JUGADOR EXPULSADO: ${player.nombre}\n\nMotivo: Acumulación de faltas.`);
+            }
+        } 
+        else {
+            // Otras stats
+            statField = action;
+            if (action === 'rebotes') logText = `🖐️ Rebote: ${player.nombre}`;
+            if (action === 'asistencias') logText = `🅰️ Asistencia: ${player.nombre}`;
+            if (action === 'robos') logText = `⚡ Robo: ${player.nombre}`;
+            if (action === 'bloqueos') logText = `🚫 Bloqueo: ${player.nombre}`;
         }
 
-        const eventData: StatEvent = { id: doc(collection(db, 'stats_partido')).id, calendarioId: selectedMatch.id, equipoId: jugador.equipoId, jugadorId: jugador.id, jugadorNombre: jugador.nombre, jugadorNumero: jugador.numero, puntos, tipo: tipo as any, timestamp: new Date().toISOString(), cuarto: currentQuarter, tiempoJuego: formatTime(time) };
-        try { await setDoc(doc(db, 'stats_partido', eventData.id), eventData); setJugadasRecientes(prev => [eventData, ...prev]); } catch (err) {}
+        // Actualizar estado local
+        setStatsCache(prev => ({ ...prev, [player.id]: newStats }));
+
+        // 2. Actualizar Firebase (Calendario / Marcador Global)
+        if (updateGlobalScore) {
+            const field = team === 'local' ? 'marcadorLocal' : 'marcadorVisitante';
+            await updateDoc(doc(db, 'calendario', matchData.id), { [field]: increment(val) });
+        }
+        if (updateGlobalFoul) {
+            const field = team === 'local' ? 'faltasLocal' : 'faltasVisitante';
+            await updateDoc(doc(db, 'calendario', matchData.id), { [field]: increment(1) });
+        }
+        await addLog(logText, action.startsWith('falta') ? 'foul' : 'stat', team);
+
+        // 3. Actualizar Firebase (Estadística Individual)
+        const statRef = doc(db, 'stats_partido', `${matchData.id}_${player.id}`);
+        const payload: any = {
+            partidoId: matchData.id,
+            jugadorId: player.id,
+            nombre: player.nombre,
+            equipo: teamName,
+            fecha: new Date().toISOString()
+        };
+
+        if (action === 'puntos') {
+            payload.puntos = increment(val);
+            if (val === 3) payload.triples = increment(1);
+        } else {
+            payload[statField] = increment(1);
+        }
+        await setDoc(statRef, payload, { merge: true });
+
+        // Si fue expulsado, deseleccionar
+        if (newStats.expulsado) setSelectedPlayer(null);
     };
 
-    const deleteSpecificEvent = async (stat: StatEvent) => {
-        if(!window.confirm(`¿Borrar ${stat.tipo}?`)) return;
-        if (stat.tipo === 'PUNTO') {
-             const isLocal = stat.equipoId === selectedMatch?.equipoLocalId;
-             const newLocal = isLocal ? marcadorLocal - stat.puntos : marcadorLocal;
-             const newVisit = !isLocal ? marcadorVisitante - stat.puntos : marcadorVisitante;
-             setMarcadorLocal(newLocal); setMarcadorVisitante(newVisit);
-             setPlayerPoints(prev => new Map(prev).set(stat.jugadorId, (prev.get(stat.jugadorId) || 0) - stat.puntos));
-             updateDoc(doc(db, 'calendario', selectedMatch!.id), { marcadorLocal: newLocal, marcadorVisitante: newVisit });
-        }
-        if (stat.tipo.startsWith('FALTA')) {
-             const isLocal = stat.equipoId === selectedMatch?.equipoLocalId;
-             const map = isLocal ? localPlayerFouls : visitantePlayerFouls;
-             const currentStats = map.get(stat.jugadorId);
-             if (currentStats && currentStats.total > 0) {
-                 const newStats = { ...currentStats }; newStats.total -= 1;
-                 if (stat.tipo === 'FALTA_T') newStats.tech--; if (stat.tipo === 'FALTA_U') newStats.unsport--;
-                 if (isLocal) setLocalPlayerFouls(new Map(localPlayerFouls).set(stat.jugadorId, newStats)); else setVisitantePlayerFouls(new Map(visitantePlayerFouls).set(stat.jugadorId, newStats));
-             }
-             if (stat.cuarto === currentQuarter) { if (isLocal && localTeamFouls > 0) setLocalTeamFouls(f => f - 1); if (!isLocal && visitanteTeamFouls > 0) setVisitanteTeamFouls(f => f - 1); }
-        }
-        await deleteDoc(doc(db, 'stats_partido', stat.id));
-        setJugadasRecientes(prev => prev.filter(s => s.id !== stat.id));
-    };
-
-    const handleFinalizar = async () => {
-        if (!selectedMatch || isRunning) { alert("Pausa reloj."); return; }
-        const mvpResult = await calculateMVP(selectedMatch.id);
-        const mvpPlayer = mvpResult.mvpData;
-        const localId = selectedMatch.equipoLocalId; const visitanteId = selectedMatch.equipoVisitanteId;
-        const isLocalWinner = marcadorLocal > marcadorVisitante;
-        const ganadorId = isLocalWinner ? localId : visitanteId; const perdedorId = isLocalWinner ? visitanteId : localId;
-
-        const registroFinal = { calendarioId: selectedMatch.id, jornada: selectedMatch.jornada, fechaRegistro: new Date().toISOString(), equipoLocalId: localId, equipoVisitanteId: visitanteId, marcadorLocal, marcadorVisitante, ganadorId, perdedorId, tiempoTotalMS: (currentQuarter * QUARTER_TIME_MS) - time, estadisticasJugadores: mvpResult.stats, mvpId: mvpResult.mvpId, mvpNombre: mvpPlayer ? mvpPlayer.jugadorNombre : 'N/A', mvpValoracion: mvpPlayer ? mvpPlayer.valoracion : 0 };
-        const docRef = await addDoc(collection(db, 'partidos'), registroFinal);
-        await updateDoc(doc(db, 'calendario', selectedMatch.id), { partidoRegistradoId: docRef.id, marcadorLocal, marcadorVisitante });
-
+    const handleFinalize = async () => {
+        if (!matchData || !window.confirm("¿FINALIZAR PARTIDO?\n\nEl resultado y estadísticas serán definitivos.")) return;
+        
         try {
-            await updateStandingsAutomatically(localId, marcadorLocal, marcadorVisitante, isLocalWinner);
-            await updateStandingsAutomatically(visitanteId, marcadorVisitante, marcadorLocal, !isLocalWinner);
-            alert("✅ Finalizado.");
-        } catch (err) { alert("Error updating standings."); }
-        if(onMatchFinalized) onMatchFinalized(); onClose();
+            // 1. Cerrar Partido (ESTO ACTUALIZA EL CALENDARIO VISUALMENTE)
+            await updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'finalizado' });
+
+            // 2. Calcular Ganador
+            const localWon = matchData.marcadorLocal > matchData.marcadorVisitante;
+            const winnerId = localWon ? matchData.equipoLocalId : matchData.equipoVisitanteId;
+            const loserId = localWon ? matchData.equipoVisitanteId : matchData.equipoLocalId;
+
+            // 3. Actualizar Tabla de Posiciones
+            const winRef = doc(db, 'equipos', winnerId);
+            const winSnap = await getDoc(winRef);
+            if (winSnap.exists()) {
+                const d = winSnap.data();
+                await updateDoc(winRef, { 
+                    victorias: (d.victorias || 0) + 1, 
+                    puntos: (d.puntos || 0) + 2, 
+                    puntos_favor: (d.puntos_favor || 0) + (localWon ? matchData.marcadorLocal : matchData.marcadorVisitante),
+                    puntos_contra: (d.puntos_contra || 0) + (localWon ? matchData.marcadorVisitante : matchData.marcadorLocal)
+                });
+            }
+
+            const loseRef = doc(db, 'equipos', loserId);
+            const loseSnap = await getDoc(loseRef);
+            if (loseSnap.exists()) {
+                const d = loseSnap.data();
+                await updateDoc(loseRef, { 
+                    derrotas: (d.derrotas || 0) + 1, 
+                    puntos: (d.puntos || 0) + 1, 
+                    puntos_favor: (d.puntos_favor || 0) + (!localWon ? matchData.marcadorLocal : matchData.marcadorVisitante),
+                    puntos_contra: (d.puntos_contra || 0) + (!localWon ? matchData.marcadorVisitante : matchData.marcadorLocal)
+                });
+            }
+
+            alert("✅ Partido finalizado correctamente.");
+            onMatchFinalized();
+            onClose();
+
+        } catch (e) { console.error(e); alert("Error finalizando."); }
     };
 
-    const handleSubstitution = async (team: 'local' | 'visitante', playerInId: string, playerOutId: string) => {
-        if (!selectedMatch) return;
-        if (team === 'local') setLocalOnCourt(prev => [...prev.filter(id => id !== playerOutId), playerInId]); else setVisitanteOnCourt(prev => [...prev.filter(id => id !== playerOutId), playerInId]);
-        setShowSubsModal(null);
-        const roster = team === 'local' ? localRoster : visitanteRoster;
-        const pIn = roster.find(p => p.id === playerInId); const pOut = roster.find(p => p.id === playerOutId);
-        if (pIn && pOut) {
-            const eventData: StatEvent = { id: doc(collection(db, 'stats_partido')).id, calendarioId: selectedMatch.id, equipoId: pIn.equipoId, jugadorId: pIn.id, jugadorNombre: pIn.nombre, jugadorNumero: pIn.numero, puntos: 0, tipo: 'CAMBIO', detalles: `Sale: #${pOut.numero} ${pOut.nombre}`, timestamp: new Date().toISOString(), cuarto: currentQuarter, tiempoJuego: formatTime(time) };
-            try { await setDoc(doc(db, 'stats_partido', eventData.id), eventData); setJugadasRecientes(prev => [eventData, ...prev]); } catch (err) {}
+    // SUSTITUCIÓN
+    const confirmSubstitution = (playerOut: Player) => {
+        if (!subMode) return;
+        // Impedir que entre alguien expulsado (aunque debería estar en la banca)
+        if (statsCache[subMode.playerIn.id]?.expulsado) {
+            alert("⛔ No puedes meter a un jugador expulsado.");
+            setSubMode(null);
+            return;
         }
+
+        if (subMode.team === 'local') {
+            setLocalOnCourt(prev => [...prev.filter(p => p.id !== playerOut.id), subMode.playerIn]);
+            setLocalBench(prev => [...prev.filter(p => p.id !== subMode.playerIn.id), playerOut]);
+        } else {
+            setVisitanteOnCourt(prev => [...prev.filter(p => p.id !== playerOut.id), subMode.playerIn]);
+            setVisitanteBench(prev => [...prev.filter(p => p.id !== subMode.playerIn.id), playerOut]);
+        }
+        addLog(`🔄 Cambio: Sale ${playerOut.nombre}, Entra ${subMode.playerIn.nombre}`, 'sub', subMode.team);
+        setSubMode(null);
+        setSelectedPlayer(null);
     };
 
-    if (!selectedMatch) return (
-        <div style={{ padding: '20px', textAlign: 'center', maxWidth: '800px', margin: '0 auto' }}>
-            <h2 style={{color: 'var(--primary)', marginBottom: '20px'}}>🏀 Mesa Técnica</h2>
-            {availableMatches.length === 0 && <div className="card" style={{padding: '20px', color: 'var(--text-muted)'}}>No hay partidos listos.</div>}
-            <div style={{display: 'grid', gap: '15px'}}>{availableMatches.map((m: any) => (<div key={m.id} onClick={() => { setSelectedMatch(m); setCurrentQuarter(1); }} className="dashboard-card" style={{height: 'auto', flexDirection: 'row', justifyContent: 'space-between', padding: '20px', textAlign: 'left'}}><div><span className="badge badge-warning">Jornada {m.jornada}</span><div style={{fontWeight: 'bold', fontSize: '1.1rem'}}>{m.equipoLocalNombre} vs {m.equipoVisitanteNombre}</div></div><button className="btn btn-success">INICIAR</button></div>))}</div>
-            <button onClick={onClose} className="btn btn-secondary" style={{marginTop: '30px'}}>Volver</button>
+    // --- VISTAS ---
+    if (!selectedMatchId) return (
+        <div className="animate-fade-in" style={{padding:'40px', maxWidth:'800px', margin:'0 auto'}}>
+            <h2 style={{color:'var(--primary)'}}>📡 Mesa Técnica FIBA Pro</h2>
+            <div style={{display:'grid', gap:'15px'}}>
+                {matches.map(m => (
+                    <div key={m.id} onClick={() => setSelectedMatchId(m.id)} className="card" style={{cursor:'pointer', borderLeft: m.estatus==='vivo'?'5px solid red':'5px solid blue', display:'flex', justifyContent:'space-between'}}>
+                        <strong>{m.equipoLocalNombre} vs {m.equipoVisitanteNombre}</strong>
+                        <span>{m.estatus === 'vivo' ? '🔴 EN VIVO' : '📅 PROGRAMADO'}</span>
+                    </div>
+                ))}
+            </div>
+            <button onClick={onClose} className="btn btn-secondary" style={{marginTop:'20px'}}>Salir</button>
         </div>
     );
 
+    if (!matchData) return <div style={{padding:'50px', color:'white'}}>Cargando...</div>;
+
+    const currentPlayerStats = selectedPlayer ? statsCache[selectedPlayer.player.id] : null;
+
     return (
-        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '10px' }}>
-            <style>{`.btn-time-compact { background: #374151; color: #fff; border: 1px solid #4b5563; border-radius: 6px; padding: 4px 8px; font-size: 0.75rem; } .btn-action-compact { border: none; border-radius: 6px; flex: 1; padding: 10px 0; font-size: 0.85rem; cursor: pointer; } .btn-stat { background: #e5e7eb; color: #374151; }`}</style>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px', alignItems: 'center' }}>
-                 <button onClick={() => setSelectedMatch(null)} className="btn btn-secondary" style={{padding: '8px 15px', fontSize: '0.9rem'}}>← Salir</button>
-                 <div style={{display: 'flex', gap: '10px'}}><button onClick={handleResetMatch} className="btn btn-danger" style={{padding: '8px 15px', fontSize: '0.9rem'}}>REINICIAR</button><button onClick={handleFinalizar} className="btn btn-primary" style={{padding: '8px 15px', fontSize: '0.9rem'}}>Finalizar Partido</button></div>
+        <div style={{background:'#121212', minHeight:'100vh', color:'white', display:'flex', flexDirection:'column'}}>
+            
+            {/* HEADER (SCOREBOARD) */}
+            <header style={{background:'#1e1e1e', padding:'10px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'1px solid #333'}}>
+                <div style={{textAlign:'center', minWidth:'150px'}}>
+                    <div style={{color:'#60a5fa', fontWeight:'bold'}}>{matchData.equipoLocalNombre}</div>
+                    <div style={{fontSize:'3rem', fontWeight:'bold', lineHeight:1}}>{matchData.marcadorLocal}</div>
+                    <div style={{color:'gray', fontSize:'0.8rem'}}>Faltas: {matchData.faltasLocal}</div>
+                </div>
+                <div style={{textAlign:'center', background:'#000', padding:'5px 20px', borderRadius:'8px', border:'2px solid #333'}}>
+                    <div style={{fontSize:'3.5rem', fontFamily:'monospace', fontWeight:'bold', color: isRunning ? '#10b981' : '#ef4444', lineHeight:1}}>
+                        {formatTime(timeLeft)}
+                    </div>
+                    <div style={{display:'flex', gap:'5px', justifyContent:'center', marginTop:'5px'}}>
+                        <button onClick={() => setIsRunning(!isRunning)} className={`btn ${isRunning?'btn-danger':'btn-primary'}`} style={{fontSize:'0.7rem', padding:'4px 10px'}}>
+                            {isRunning ? 'PAUSA' : 'INICIO'}
+                        </button>
+                    </div>
+                    <div style={{marginTop:'5px', color:'yellow', fontWeight:'bold', fontSize:'0.9rem'}}>Q{matchData.cuarto}</div>
+                </div>
+                <div style={{textAlign:'center', minWidth:'150px'}}>
+                    <div style={{color:'#fbbf24', fontWeight:'bold'}}>{matchData.equipoVisitanteNombre}</div>
+                    <div style={{fontSize:'3rem', fontWeight:'bold', lineHeight:1}}>{matchData.marcadorVisitante}</div>
+                    <div style={{color:'gray', fontSize:'0.8rem'}}>Faltas: {matchData.faltasVisitante}</div>
+                </div>
+            </header>
+
+            {/* ÁREA DE JUEGO */}
+            <div style={{flex:1, display:'flex', overflow:'hidden'}}>
+                
+                {/* --- IZQUIERDA: LOCAL --- */}
+                <div style={{flex:1, borderRight:'1px solid #333', display:'flex', flexDirection:'column', background:'#1a1a1a'}}>
+                    <div style={{padding:'10px', background:'#262626', color:'#60a5fa', fontWeight:'bold', textAlign:'center'}}>EN CANCHA</div>
+                    <div style={{padding:'10px', overflowY:'auto', flex:1}}>
+                        {localOnCourt.map(p => {
+                            const isExpulsado = statsCache[p.id]?.expulsado;
+                            const faltas = statsCache[p.id]?.faltasTotales || 0;
+                            return (
+                                <div key={p.id} onClick={() => { if(isExpulsado) return; subMode?.team==='local' ? confirmSubstitution(p) : setSelectedPlayer({player: p, team: 'local'}) }}
+                                    style={{
+                                        padding:'12px', marginBottom:'8px', borderRadius:'6px', cursor: isExpulsado ? 'not-allowed' : 'pointer',
+                                        background: isExpulsado ? '#450a0a' : selectedPlayer?.player.id === p.id ? '#3b82f6' : subMode?.team==='local' ? '#dc2626' : '#333',
+                                        color: isExpulsado ? '#999' : 'white', display:'flex', justifyContent:'space-between', alignItems:'center',
+                                        border: selectedPlayer?.player.id === p.id ? '2px solid white' : 'none', opacity: isExpulsado ? 0.6 : 1
+                                    }}>
+                                    <span style={{fontWeight:'bold'}}>#{p.numero} {p.nombre}</span>
+                                    <div style={{display:'flex', gap:'5px'}}>
+                                        {[...Array(faltas)].map((_,i) => <div key={i} style={{width:'8px', height:'8px', borderRadius:'50%', background: i>=4?'red':'yellow'}}></div>)}
+                                        {isExpulsado && <span style={{fontSize:'0.8rem', color:'red', fontWeight:'bold'}}>EXP</span>}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    {/* BANCA */}
+                    <div style={{padding:'10px', background:'#121212', borderTop:'1px solid #333', display:'flex', flexWrap:'wrap', gap:'5px'}}>
+                        {localBench.map(p => {
+                             const isExpulsado = statsCache[p.id]?.expulsado;
+                             return (
+                                <button key={p.id} onClick={()=>setSubMode({team:'local', playerIn:p})} disabled={!!subMode || isExpulsado} 
+                                    style={{background: isExpulsado?'#333':'#333', color: isExpulsado?'#555':'#ccc', border:'none', padding:'5px 10px', borderRadius:'4px', cursor: isExpulsado?'not-allowed':'pointer', fontSize:'0.8rem', textDecoration: isExpulsado?'line-through':'none'}}>
+                                    #{p.numero} {p.nombre}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* --- CENTRO: PANEL DE CONTROL --- */}
+                <div style={{width:'320px', background:'#222', display:'flex', flexDirection:'column', borderRight:'1px solid #333'}}>
+                    <div style={{padding:'15px', background:'#000', textAlign:'center', borderBottom:'1px solid #444'}}>
+                        <div style={{fontSize:'0.8rem', color:'#888'}}>ACCIONES PARA:</div>
+                        <div style={{fontSize:'1.2rem', fontWeight:'bold', color:'white', minHeight:'1.5rem'}}>
+                            {selectedPlayer ? selectedPlayer.player.nombre : 'Selecciona un Jugador'}
+                        </div>
+                        {selectedPlayer && currentPlayerStats && (
+                             <div style={{fontSize:'0.8rem', color: currentPlayerStats.faltasTotales>=4 ? 'red' : '#aaa', marginTop:'5px'}}>
+                                Faltas: {currentPlayerStats.faltasPersonales}P / {currentPlayerStats.faltasTecnicas}T / {currentPlayerStats.faltasAntideportivas}U
+                             </div>
+                        )}
+                    </div>
+
+                    <div style={{padding:'15px', display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'8px', flex:1, alignContent:'start'}}>
+                        {/* PUNTOS */}
+                        <button onClick={()=>handleStat('puntos', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#fff', color:'#000', fontWeight:'bold'}}>+1</button>
+                        <button onClick={()=>handleStat('puntos', 2)} disabled={!selectedPlayer} className="btn" style={{background:'#3b82f6', color:'white', fontWeight:'bold'}}>+2</button>
+                        <button onClick={()=>handleStat('puntos', 3)} disabled={!selectedPlayer} className="btn" style={{background:'#eab308', color:'black', fontWeight:'bold'}}>+3</button>
+                        
+                        <hr style={{gridColumn:'span 3', borderColor:'#444', width:'100%', margin:'5px 0'}}/>
+                        
+                        {/* ESTADÍSTICAS */}
+                        <button onClick={()=>handleStat('rebotes', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#10b981', color:'white', fontSize:'0.8rem'}}>REB</button>
+                        <button onClick={()=>handleStat('asistencias', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#8b5cf6', color:'white', fontSize:'0.8rem'}}>ASIST</button>
+                        <button onClick={()=>handleStat('robos', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#f97316', color:'white', fontSize:'0.8rem'}}>ROBO</button>
+                        <button onClick={()=>handleStat('bloqueos', 1)} disabled={!selectedPlayer} className="btn" style={{background:'#64748b', color:'white', fontSize:'0.8rem', gridColumn:'span 3'}}>BLOQUEO / TAPÓN</button>
+                        
+                        <hr style={{gridColumn:'span 3', borderColor:'#444', width:'100%', margin:'5px 0'}}/>
+                        
+                        {/* FALTAS */}
+                        <button onClick={()=>handleStat('falta_P', 0)} disabled={!selectedPlayer} className="btn" style={{background:'#dc2626', color:'white', fontWeight:'bold'}}>P</button>
+                        <button onClick={()=>handleStat('falta_T', 0)} disabled={!selectedPlayer} className="btn" style={{background:'#be123c', color:'white', fontWeight:'bold'}}>T</button>
+                        <button onClick={()=>handleStat('falta_U', 0)} disabled={!selectedPlayer} className="btn" style={{background:'#7f1d1d', color:'white', fontWeight:'bold'}}>U</button>
+                        <div style={{gridColumn:'span 3', textAlign:'center', fontSize:'0.7rem', color:'#666'}}>P: Personal | T: Técnica | U: Antideportiva</div>
+                    </div>
+
+                    {/* LOG */}
+                    <div style={{height:'180px', background:'#000', overflowY:'auto', padding:'10px', fontSize:'0.75rem'}}>
+                        {matchData.gameLog?.map((log) => (
+                            <div key={log.id} style={{color: log.team==='local'?'#60a5fa': log.team==='visitante'?'#fbbf24':'#ccc', marginBottom:'2px', borderBottom:'1px solid #222', paddingBottom:'2px'}}>
+                                <span style={{opacity:0.6}}>[{log.time}]</span> {log.text}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* --- DERECHA: VISITANTE --- */}
+                <div style={{flex:1, display:'flex', flexDirection:'column', background:'#1a1a1a'}}>
+                    <div style={{padding:'10px', background:'#262626', color:'#fbbf24', fontWeight:'bold', textAlign:'center'}}>EN CANCHA</div>
+                    <div style={{padding:'10px', overflowY:'auto', flex:1}}>
+                        {visitanteOnCourt.map(p => {
+                            const isExpulsado = statsCache[p.id]?.expulsado;
+                            const faltas = statsCache[p.id]?.faltasTotales || 0;
+                            return (
+                                <div key={p.id} onClick={() => { if(isExpulsado) return; subMode?.team==='visitante' ? confirmSubstitution(p) : setSelectedPlayer({player: p, team: 'visitante'}) }}
+                                    style={{
+                                        padding:'12px', marginBottom:'8px', borderRadius:'6px', cursor: isExpulsado ? 'not-allowed' : 'pointer',
+                                        background: isExpulsado ? '#450a0a' : selectedPlayer?.player.id === p.id ? '#eab308' : subMode?.team==='visitante' ? '#dc2626' : '#333',
+                                        color: isExpulsado ? '#999' : selectedPlayer?.player.id === p.id ? 'black' : 'white', display:'flex', justifyContent:'space-between', alignItems:'center',
+                                        border: selectedPlayer?.player.id === p.id ? '2px solid white' : 'none', opacity: isExpulsado ? 0.6 : 1
+                                    }}>
+                                    <span style={{fontWeight:'bold'}}>#{p.numero} {p.nombre}</span>
+                                    <div style={{display:'flex', gap:'5px'}}>
+                                        {[...Array(faltas)].map((_,i) => <div key={i} style={{width:'8px', height:'8px', borderRadius:'50%', background: i>=4?'red':'yellow'}}></div>)}
+                                        {isExpulsado && <span style={{fontSize:'0.8rem', color:'red', fontWeight:'bold'}}>EXP</span>}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    {/* BANCA */}
+                    <div style={{padding:'10px', background:'#121212', borderTop:'1px solid #333', display:'flex', flexWrap:'wrap', gap:'5px'}}>
+                        {visitanteBench.map(p => {
+                             const isExpulsado = statsCache[p.id]?.expulsado;
+                             return (
+                                <button key={p.id} onClick={()=>setSubMode({team:'visitante', playerIn:p})} disabled={!!subMode || isExpulsado} 
+                                    style={{background: isExpulsado?'#333':'#333', color: isExpulsado?'#555':'#ccc', border:'none', padding:'5px 10px', borderRadius:'4px', cursor: isExpulsado?'not-allowed':'pointer', fontSize:'0.8rem', textDecoration: isExpulsado?'line-through':'none'}}>
+                                    #{p.numero} {p.nombre}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
             </div>
-            <ScoreBoard selectedMatch={selectedMatch} marcadorLocal={marcadorLocal} marcadorVisitante={marcadorVisitante} localTeamFouls={localTeamFouls} visitanteTeamFouls={visitanteTeamFouls} currentQuarter={currentQuarter} time={time} isRunning={isRunning} setIsRunning={setIsRunning} adjustTime={adjustTime} handleQuarterChange={handleQuarterChange} />
-            {showSubsModal && <SubstitutionModal showSubsModal={showSubsModal} localRoster={localRoster} visitanteRoster={visitanteRoster} localOnCourt={localOnCourt} visitanteOnCourt={visitanteOnCourt} selectedMatch={selectedMatch} handleSubstitution={handleSubstitution} setShowSubsModal={setShowSubsModal} localPlayerFouls={localPlayerFouls} visitantePlayerFouls={visitantePlayerFouls} />}
-            <div style={{ display: 'flex', gap: '20px', flexDirection: 'row', alignItems: 'flex-start' }}>
-                <div style={{ flex: 1 }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', background: 'var(--primary)', color: 'white', padding: '10px 15px', borderRadius: '10px' }}><h4 style={{ margin: 0, fontSize: '1rem', color: 'white' }}>LOCAL</h4><button onClick={() => setShowSubsModal('local')} className="btn" style={{fontSize: '0.75rem', padding: '4px 10px', background: 'white', color: 'var(--primary)'}}>CAMBIOS</button></div><div>{localRoster.filter(p => localOnCourt.includes(p.id)).map(player => <PlayerCard key={player.id} player={player} isLocal={true} foulStats={localPlayerFouls.get(player.id)} points={(playerPoints.get(player.id) || 0)} recordEvent={recordEvent} />)}</div></div>
-                <div style={{ flex: 1 }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', background: 'var(--danger)', color: 'white', padding: '10px 15px', borderRadius: '10px' }}><h4 style={{ margin: 0, fontSize: '1rem', color: 'white' }}>VISITANTE</h4><button onClick={() => setShowSubsModal('visitante')} className="btn" style={{fontSize: '0.75rem', padding: '4px 10px', background: 'white', color: 'var(--danger)'}}>CAMBIOS</button></div><div>{visitanteRoster.filter(p => visitanteOnCourt.includes(p.id)).map(player => <PlayerCard key={player.id} player={player} isLocal={false} foulStats={visitantePlayerFouls.get(player.id)} points={(playerPoints.get(player.id) || 0)} recordEvent={recordEvent} />)}</div></div>
+
+            {/* MENSAJE DE SUSTITUCIÓN */}
+            {subMode && (
+                <div style={{background:'#dc2626', color:'white', textAlign:'center', padding:'10px', fontWeight:'bold'}}>
+                    🔄 CAMBIO: Haz click en el jugador en cancha que SALE por {subMode.playerIn.nombre}
+                    <button onClick={()=>setSubMode(null)} style={{marginLeft:'20px', color:'black', cursor:'pointer'}}>Cancelar</button>
+                </div>
+            )}
+
+            {/* FOOTER */}
+            <div style={{padding:'10px', background:'#111', borderTop:'1px solid #333', textAlign:'center'}}>
+                <button onClick={onClose} className="btn btn-secondary" style={{marginRight:'20px'}}>SALIR</button>
+                <button onClick={handleFinalize} className="btn" style={{background:'#10b981', color:'white'}}>FINALIZAR PARTIDO Y ACTUALIZAR TABLA</button>
             </div>
-            <div className="card" style={{ marginTop: '20px', padding: '15px' }}><h5 style={{margin: '0 0 15px 0', fontSize: '1rem', color: 'var(--text-muted)'}}>📋 Historial</h5><div style={{ maxHeight: '200px', overflowY: 'auto' }}><table className="data-table" style={{fontSize: '0.85rem'}}><thead><tr><th style={{padding: '8px'}}>Hora</th><th style={{padding: '8px'}}>Jugador</th><th style={{padding: '8px'}}>Acción</th><th style={{padding: '8px', textAlign: 'center'}}>Pts</th><th style={{padding: '8px', textAlign: 'center'}}>Borrar</th></tr></thead><tbody>{jugadasRecientes.map(j => (<tr key={j.id}><td style={{padding: '8px'}}>{j.tiempoJuego}</td><td style={{padding: '8px'}}>#{j.jugadorNumero} {j.jugadorNombre}</td><td style={{padding: '8px'}}>{j.tipo}</td><td style={{padding: '8px', textAlign: 'center'}}>{j.puntos}</td><td style={{padding: '8px', textAlign: 'center'}}><button onClick={() => deleteSpecificEvent(j)} style={{background: 'none', border: 'none'}}>🗑️</button></td></tr>))}</tbody></table></div></div>
         </div>
     );
 };
