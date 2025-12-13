@@ -20,16 +20,15 @@ const NewsFeed: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         fetch();
     }, []);
 
+    // MODAL (Solo se usa ahora si quieres ver la foto en gigante)
     const renderModal = () => (
         <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', backdropFilter: 'blur(5px)'}} onClick={() => setSelectedNews(null)}>
             <div className="animate-fade-in" style={{backgroundColor: 'white', padding: '0', borderRadius: '16px', maxWidth: '600px', width: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', position: 'relative', overflow: 'hidden'}} onClick={(e) => e.stopPropagation()}>
-                
                 {selectedNews?.imageUrl && (
-                    <div style={{width: '100%', height: '300px', overflow: 'hidden', backgroundColor: '#f3f4f6'}}>
+                    <div style={{width: '100%', height: 'auto', maxHeight:'400px', overflow: 'hidden', backgroundColor: '#f3f4f6'}}>
                         <img src={selectedNews.imageUrl} alt="Noticia" style={{width: '100%', height: '100%', objectFit: 'contain'}} />
                     </div>
                 )}
-
                 <div style={{padding: '30px'}}>
                     <div style={{display:'flex', justifyContent:'space-between', alignItems:'start', marginBottom:'20px', borderBottom:'1px solid #eee', paddingBottom:'15px'}}>
                         <div>
@@ -40,11 +39,9 @@ const NewsFeed: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                         </div>
                         <button onClick={() => setSelectedNews(null)} className="btn btn-secondary" style={{fontSize:'1.2rem', padding:'5px 12px'}}>×</button>
                     </div>
-                    
                     <div style={{whiteSpace: 'pre-wrap', lineHeight: '1.8', color: 'var(--text-main)', fontSize: '1rem'}}>
                         {selectedNews?.cuerpo}
                     </div>
-
                     <div style={{marginTop: '30px', textAlign: 'right'}}>
                         <button onClick={() => setSelectedNews(null)} className="btn btn-primary">Cerrar</button>
                     </div>
@@ -61,7 +58,7 @@ const NewsFeed: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             </div>
 
             {loading ? <div style={{textAlign:'center', padding:'40px', color:'var(--text-muted)'}}>Cargando noticias...</div> : news.length === 0 ? <div className="card" style={{textAlign:'center', padding:'40px'}}>No hay noticias publicadas.</div> : (
-                <div style={{display: 'flex', flexDirection: 'column', gap: '15px'}}>
+                <div style={{display: 'flex', flexDirection: 'column', gap: '20px'}}>
                     {news.map(item => {
                         let borderLeft = '4px solid var(--primary)';
                         let bg = 'white';
@@ -70,21 +67,33 @@ const NewsFeed: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                         else if (item.tipo === 'destacado') { borderLeft = '4px solid var(--accent)'; bg = '#fff7ed'; icon = '⭐'; }
 
                         return (
-                            <div key={item.id} className="card dashboard-card" onClick={() => setSelectedNews(item)} style={{padding:'0', marginBottom:0, borderLeft, background: bg, height: 'auto', cursor: 'pointer', textAlign: 'left', overflow: 'hidden', display: 'flex'}}>
+                            <div key={item.id} className="card dashboard-card" onClick={() => setSelectedNews(item)} style={{padding:'0', marginBottom:0, borderLeft, background: bg, height: 'auto', cursor: 'pointer', textAlign: 'left', overflow: 'hidden', display: 'flex', flexDirection: 'column'}}>
+                                
+                                {/* 1. IMAGEN GRANDE ARRIBA (Si tiene foto) */}
                                 {item.imageUrl && (
-                                    <div style={{width: '100px', minWidth: '100px', height: 'auto', background: `url(${item.imageUrl}) center/cover no-repeat`}}></div>
+                                    <div style={{width: '100%', height: '200px', background: `url(${item.imageUrl}) center/cover no-repeat`}}></div>
                                 )}
-                                <div style={{padding: '15px', flex: 1}}>
-                                    <div style={{display:'flex', justifyContent:'space-between', width: '100%', marginBottom:'5px'}}>
-                                        <span style={{fontWeight:'bold', color:'var(--text-main)', fontSize:'1rem', display:'flex', alignItems:'center', gap:'8px'}}>
+
+                                <div style={{padding: '20px'}}>
+                                    {/* 2. TÍTULO Y FECHA */}
+                                    <div style={{display:'flex', justifyContent:'space-between', width: '100%', marginBottom:'10px', alignItems:'flex-start'}}>
+                                        <span style={{fontWeight:'bold', color:'var(--text-main)', fontSize:'1.1rem', display:'flex', alignItems:'center', gap:'8px'}}>
                                             <span>{icon}</span> {item.titulo}
                                         </span>
-                                        <span style={{fontSize:'0.7rem', color:'var(--text-muted)', whiteSpace: 'nowrap'}}>
+                                        <span style={{fontSize:'0.75rem', color:'var(--text-muted)', whiteSpace: 'nowrap', marginLeft:'10px'}}>
                                             {item.fecha?.seconds ? new Date(item.fecha.seconds * 1000).toLocaleDateString() : ''}
                                         </span>
                                     </div>
-                                    <p style={{fontSize:'0.85rem', color:'var(--text-muted)', margin:0}}>
-                                        {item.cuerpo.length > 100 ? item.cuerpo.substring(0, 100) + '...' : item.cuerpo}
+                                    
+                                    {/* 3. TEXTO COMPLETO (Sin cortes) */}
+                                    <p style={{
+                                        fontSize:'0.95rem', 
+                                        color:'var(--text-main)', 
+                                        margin:0, 
+                                        whiteSpace: 'pre-wrap', // ¡ESTO ES LA CLAVE! Respeta saltos de línea
+                                        lineHeight: '1.6'
+                                    }}>
+                                        {item.cuerpo}
                                     </p>
                                 </div>
                             </div>

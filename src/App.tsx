@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import './App.css'; 
 import { db, auth } from './firebase'; 
-import { collection, getDocs, doc, onSnapshot } from 'firebase/firestore'; 
+// AGREGAMOS 'query' y 'where' AQUI ABAJO
+import { collection, getDocs, doc, onSnapshot, query, where } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth'; 
 import type { DocumentData } from 'firebase/firestore'; 
 
@@ -49,7 +50,7 @@ function App() {
   const [liveMatchId, setLiveMatchId] = useState<string | null>(null);
   const [detailMatchId, setDetailMatchId] = useState<string | null>(null);
   const [newsAdminView, setNewsAdminView] = useState(false);
-  const [newsFeedView, setNewsFeedView] = useState(false); // ¡NUEVO ESTADO!
+  const [newsFeedView, setNewsFeedView] = useState(false);
   
   const [dataRefreshKey, setDataRefreshKey] = useState(0); 
 
@@ -84,18 +85,31 @@ function App() {
     return () => { unsubAuth(); if (unsubProfile) unsubProfile(); };
   }, []);
 
-  // DATA
+  // DATA (CORREGIDO PARA FILTRAR POR DELEGADO)
   useEffect(() => {
     if (!user || user.rol === 'pendiente') return;
     const load = async () => {
         try {
+            // Cargar equipos (Tabla General) - Esto sí lo ven todos
             const eqSnap = await getDocs(collection(db, "equipos"));
             setEquipos(eqSnap.docs.map(d => ({ id: d.id, ...d.data() as any })));
-            if (user.rol === 'admin' || user.rol === 'delegado') {
+
+            // Cargar Formas 21 (AQUÍ ESTÁ LA CORRECCIÓN)
+            if (user.rol === 'admin') {
+                // El Admin ve TODO
                 const fSnap = await getDocs(collection(db, 'forma21s'));
                 setFormas21(await Promise.all(fSnap.docs.map(async d => ({ id: d.id, ...d.data(), rosterCompleto: (await getDocs(collection(db, 'forma21s', d.id, 'jugadores'))).docs.length >= 10 } as Forma21))));
+            } 
+            else if (user.rol === 'delegado') {
+                // El Delegado SOLO ve SU equipo (Filtrado por delegadoId)
+                const q = query(collection(db, 'forma21s'), where('delegadoId', '==', user.uid));
+                const fSnap = await getDocs(q);
+                
+                setFormas21(await Promise.all(fSnap.docs.map(async d => ({ id: d.id, ...d.data(), rosterCompleto: (await getDocs(collection(db, 'forma21s', d.id, 'jugadores'))).docs.length >= 10 } as Forma21))));
             }
-        } catch(e) {}
+        } catch(e) {
+            console.error("Error cargando datos:", e);
+        }
     };
     load();
   }, [user, dataRefreshKey]);
@@ -152,7 +166,6 @@ function App() {
                     <div className="dashboard-card" onClick={()=>setCalendarView(true)}><div className="card-icon">📅</div><div className="card-title">Calendario</div></div>
                     <div className="dashboard-card" onClick={()=>setStandingsView(true)}><div className="card-icon">🏆</div><div className="card-title">Tabla General</div></div>
                     <div className="dashboard-card" onClick={()=>setStatsView(true)}><div className="card-icon">📊</div><div className="card-title">Líderes</div></div>
-                    {/* BOTÓN NUEVO DE NOVEDADES */}
                     <div className="dashboard-card" onClick={()=>setNewsFeedView(true)}><div className="card-icon">📢</div><div className="card-title">Novedades</div></div>
                 </div>
 
