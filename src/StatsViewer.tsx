@@ -21,7 +21,6 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const [stats, setStats] = useState<PlayerStat[]>([]);
     const [mvp, setMvp] = useState<PlayerStat | null>(null);
     const [loading, setLoading] = useState(true);
-    // AGREGAMOS LA OPCIÓN 'mvp' AL ESTADO DE LAS PESTAÑAS
     const [tab, setTab] = useState<'puntos' | 'rebotes' | 'asistencias' | 'mvp'>('mvp'); 
 
     useEffect(() => {
@@ -104,7 +103,6 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
     const getSorted = () => {
         const data = [...stats];
-        // LOGICA DE ORDENAMIENTO
         if (tab === 'mvp') return data.sort((a,b) => b.valoracionPromedio - a.valoracionPromedio);
         if (tab === 'puntos') return data.sort((a,b) => (b.puntos/b.partidos) - (a.puntos/a.partidos));
         if (tab === 'rebotes') return data.sort((a,b) => (b.rebotes/b.partidos) - (a.rebotes/a.partidos));
@@ -139,7 +137,8 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
                             <div style={{flex: 1, zIndex: 2}}>
                                 <div style={{color: '#fbbf24', fontWeight: 'bold', letterSpacing: '2px', fontSize: '0.8rem', marginBottom: '5px', textTransform: 'uppercase', background:'rgba(251, 191, 36, 0.1)', display:'inline-block', padding:'2px 8px', borderRadius:'4px'}}>Líder Carrera MVP</div>
-                                <h2 style={{margin: '5px 0', fontSize: '1.8rem', lineHeight: 1.1}}>{mvp.nombre}</h2>
+                                {/* CORRECCIÓN AQUÍ: Color blanco explícito */}
+                                <h2 style={{margin: '5px 0', fontSize: '1.8rem', lineHeight: 1.1, color: 'white'}}>{mvp.nombre}</h2>
                                 <div style={{color: '#94a3b8', fontSize: '1rem', display:'flex', alignItems:'center', gap:'5px'}}>
                                     <span>{mvp.equipo}</span> • <span>VAL: {mvp.valoracionPromedio.toFixed(1)}</span>
                                 </div>
@@ -147,7 +146,7 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                         </div>
                     )}
 
-                    {/* --- PESTAÑAS (INCLUYENDO LA NUEVA DE MVP) --- */}
+                    {/* --- PESTAÑAS --- */}
                     <div style={{display:'flex', gap:'10px', marginBottom:'20px', overflowX:'auto', paddingBottom:'5px'}}>
                         <button onClick={()=>setTab('mvp')} className="btn" style={{
                             flex:1, minWidth:'120px', fontWeight:'bold',
