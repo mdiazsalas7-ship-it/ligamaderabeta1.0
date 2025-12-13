@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import './App.css'; 
 import { db, auth } from './firebase'; 
-// AGREGAMOS 'query' y 'where' AQUI ABAJO
 import { collection, getDocs, doc, onSnapshot, query, where } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth'; 
 import type { DocumentData } from 'firebase/firestore'; 
 
+// Importaciones de tus componentes (asegúrate de que los archivos existan)
 import Login from './Login';
 import UserManagement from './UserManagement'; 
 import RegistroForma21 from './RegistroForma21'; 
@@ -25,9 +25,10 @@ import MatchDetailViewer from './MatchDetailViewer';
 import NewsAdmin from './NewsAdmin'; 
 import NewsFeed from './NewsFeed';   
 
-interface Equipo { id: string; nombre: string; victorias: number; derrotas: number; puntos_favor: number; puntos_contra?: number; puntos?: number; }
+// Interfaces Globales
+interface Equipo { id: string; nombre: string; victorias: number; derrotas: number; puntos_favor: number; puntos_contra?: number; puntos?: number; logoUrl?: string; }
 interface UsuarioData extends DocumentData { uid: string; email: string | null; rol: 'admin' | 'delegado' | 'pendiente' | 'jugador' | 'fan'; equipoId?: string; }
-interface Forma21 extends DocumentData { id: string; delegadoId: string; nombreEquipo: string; fechaRegistro: { seconds: number }; rosterCompleto?: boolean; delegadoEmail?: string; aprobado?: boolean; }
+interface Forma21 extends DocumentData { id: string; delegadoId: string; nombreEquipo: string; fechaRegistro: { seconds: number }; rosterCompleto?: boolean; delegadoEmail?: string; aprobado?: boolean; logoUrl?: string; }
 
 function App() {
   const [user, setUser] = useState<UsuarioData | null>(null);
@@ -35,7 +36,7 @@ function App() {
   const [formas21, setFormas21] = useState<Forma21[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   
-  // NAVEGACIÓN
+  // ESTADOS DE NAVEGACIÓN (Vistas)
   const [viewRosterId, setViewRosterId] = useState<string | null>(null); 
   const [matchView, setMatchView] = useState(false); 
   const [adminFormView, setAdminFormView] = useState(false); 
@@ -62,131 +63,134 @@ function App() {
     setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false);
   };
   
-  const recalculateStandings = async () => { refreshData(); };
-  
-  // AUTH
+  // AUTENTICACIÓN
   useEffect(() => {
-    let unsubProfile: (() => void) | null = null;
     const unsubAuth = onAuthStateChanged(auth, (u) => {
       if (u) {
-        if (unsubProfile) unsubProfile();
-        unsubProfile = onSnapshot(doc(db, 'usuarios', u.uid), (docSnap) => {
+        // Escuchar cambios en el perfil del usuario en tiempo real
+        const unsubProfile = onSnapshot(doc(db, 'usuarios', u.uid), (docSnap) => {
             if (docSnap.exists()) {
                 const data = docSnap.data();
                 setUser({ uid: u.uid, email: u.email, rol: data.rol || 'pendiente', equipoId: data.equipoId });
             } else { setUser({ uid: u.uid, email: u.email, rol: 'pendiente' }); }
             setLoading(false);
         });
+        return () => unsubProfile();
       } else {
-        if (unsubProfile) unsubProfile();
-        unsubProfile = null; setUser(null); setLoading(false);
+        setUser(null); setLoading(false);
       }
     });
-    return () => { unsubAuth(); if (unsubProfile) unsubProfile(); };
+    return () => unsubAuth();
   }, []);
 
-  // DATA (CORREGIDO PARA FILTRAR POR DELEGADO)
+  // CARGA DE DATOS (Centralizada)
   useEffect(() => {
     if (!user || user.rol === 'pendiente') return;
-    const load = async () => {
-        try {
-            // Cargar equipos (Tabla General) - Esto sí lo ven todos
-            const eqSnap = await getDocs(collection(db, "equipos"));
-            setEquipos(eqSnap.docs.map(d => ({ id: d.id, ...d.data() as any })));
 
-            // Cargar Formas 21 (AQUÍ ESTÁ LA CORRECCIÓN)
+    const loadData = async () => {
+        try {
+            // 1. Cargar Tabla de Posiciones (Público)
+            const eqSnap = await getDocs(collection(db, "equipos"));
+            setEquipos(eqSnap.docs.map(d => ({ id: d.id, ...d.data() } as Equipo)));
+
+            // 2. Cargar Formas 21 (Según el Rol)
+            let q;
             if (user.rol === 'admin') {
-                // El Admin ve TODO
-                const fSnap = await getDocs(collection(db, 'forma21s'));
-                setFormas21(await Promise.all(fSnap.docs.map(async d => ({ id: d.id, ...d.data(), rosterCompleto: (await getDocs(collection(db, 'forma21s', d.id, 'jugadores'))).docs.length >= 10 } as Forma21))));
-            } 
-            else if (user.rol === 'delegado') {
-                // El Delegado SOLO ve SU equipo (Filtrado por delegadoId)
-                const q = query(collection(db, 'forma21s'), where('delegadoId', '==', user.uid));
-                const fSnap = await getDocs(q);
-                
-                setFormas21(await Promise.all(fSnap.docs.map(async d => ({ id: d.id, ...d.data(), rosterCompleto: (await getDocs(collection(db, 'forma21s', d.id, 'jugadores'))).docs.length >= 10 } as Forma21))));
+                q = query(collection(db, 'forma21s')); // Admin ve todo
+            } else if (user.rol === 'delegado') {
+                q = query(collection(db, 'forma21s'), where('delegadoId', '==', user.uid)); // Delegado ve lo suyo
+            } else {
+                q = query(collection(db, 'forma21s')); // Jugadores/Fans ven todo (limitado visualmente luego)
             }
+
+            const fSnap = await getDocs(q);
+            // Procesamos para saber si el roster está completo (>=10 jugadores)
+            const formasProcesadas = await Promise.all(fSnap.docs.map(async d => {
+                const jugSnap = await getDocs(collection(db, 'forma21s', d.id, 'jugadores'));
+                return { 
+                    id: d.id, 
+                    ...d.data(), 
+                    rosterCompleto: jugSnap.size >= 10 
+                } as Forma21;
+            }));
+            setFormas21(formasProcesadas);
+
         } catch(e) {
             console.error("Error cargando datos:", e);
         }
     };
-    load();
+    loadData();
   }, [user, dataRefreshKey]);
 
-  if (loading) return <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100vh', color:'var(--primary)'}}>Cargando...</div>;
+  if (loading) return <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100vh'}}>Cargando sistema...</div>;
   if (!user) return <Login />;
   
   if (user.rol === 'pendiente') return (
-    <div className="login-wrapper"><div className="login-box"><h2>⏳ Solicitud en Proceso</h2><p>Estamos configurando tu perfil.</p><button onClick={()=>signOut(auth)} className="btn btn-secondary">Salir</button></div></div>
+    <div className="login-wrapper"><div className="login-box"><h2>⏳ Esperando Activación</h2><p>Tu cuenta está pendiente.</p><button onClick={()=>signOut(auth)} className="btn">Salir</button></div></div>
   );
 
-  const currentEquipoName = formas21.find(f => f.id === selectedFormId || f.id === viewRosterId)?.nombreEquipo || 'Equipo';
   const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView);
 
   return (
     <div className="app-container">
       <header className="header">
-        <div className="logo-section"><img src="https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg" alt="Logo" className="league-logo" /><h1>LIGA MADERA 15</h1></div>
-        <div className="user-info-container"><span style={{fontSize:'0.8rem', fontWeight:'bold', color:'var(--primary)', marginRight:'10px'}}>{user.rol.toUpperCase()}</span><button onClick={()=>signOut(auth)} className="btn btn-logout">Salir</button></div>
+        <div className="logo-section"><h1>LIGA MADERA 15</h1></div>
+        <div className="user-info-container">
+            <span>{user.rol.toUpperCase()}</span>
+            <button onClick={()=>signOut(auth)} className="btn btn-logout">Salir</button>
+        </div>
       </header>
       
       <main className="main-content">
-        
-        {/* VISTAS PÚBLICAS */}
+        {/* RENDERIZADO DE VISTAS SEGÚN ESTADO */}
         {newsFeedView && <NewsFeed onClose={() => setNewsFeedView(false)} />}
         {liveMatchId && <LiveGameViewer matchId={liveMatchId} onClose={() => setLiveMatchId(null)} />}
         {detailMatchId && <MatchDetailViewer matchId={detailMatchId} onClose={() => setDetailMatchId(null)} />}
         {calendarView && <CalendarViewer rol={user.rol} userEquipoId={user.equipoId || null} onClose={() => setCalendarView(false)} onViewLive={(id) => { setCalendarView(false); setLiveMatchId(id); }} onViewDetail={(id) => { setCalendarView(false); setDetailMatchId(id); }} />}
         {statsView && <StatsViewer onClose={() => setStatsView(false)} />}
         {standingsView && <StandingsViewer equipos={equipos} onClose={() => setStandingsView(false)} />}
-
-        {/* VISTAS DE GESTIÓN (ADMIN) */}
         {newsAdminView && <NewsAdmin onClose={() => setNewsAdminView(false)} />}
-        {viewRosterId && <RosterViewer forma21Id={viewRosterId} nombreEquipo={currentEquipoName} onClose={() => setViewRosterId(null)} />}
+        {viewRosterId && <RosterViewer forma21Id={viewRosterId} nombreEquipo={formas21.find(f=>f.id===viewRosterId)?.nombreEquipo || 'Equipo'} onClose={() => setViewRosterId(null)} />}
         {matchView && <MatchForm onSuccess={() => {setMatchView(false); refreshData();}} onClose={() => setMatchView(false)} />}
         {adminFormView && <Forma21AdminViewer onClose={() => setAdminFormView(false)} setViewRosterId={setViewRosterId} />}
         {usersView && <UserManagement onClose={() => setUsersView(false)} />}
-        
-        {/* VISTAS DELEGADO */}
         {registroView && <RegistroForma21 onSuccess={refreshData} onClose={() => setRegistroView(false)} />}
-        {selectedFormId && <RosterForm forma21Id={selectedFormId} nombreEquipo={currentEquipoName} onSuccess={() => {setSelectedFormId(null); refreshData();}} onClose={() => setSelectedFormId(null)} />}
+        {selectedFormId && <RosterForm forma21Id={selectedFormId} nombreEquipo={formas21.find(f=>f.id===selectedFormId)?.nombreEquipo || 'Equipo'} onSuccess={() => {setSelectedFormId(null); refreshData();}} onClose={() => setSelectedFormId(null)} />}
         {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || ''} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
-        {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={recalculateStandings} />}
+        {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={refreshData} />}
 
         {isDashboard && (
             <div className="animate-fade-in">
-                <div className="card" style={{borderLeft:'5px solid var(--primary)', padding:'1.5rem', marginBottom:'25px'}}>
-                    <h2 style={{marginTop:0, fontSize:'1.5rem', color:'var(--primary)'}}>Hola, {user.email?.split('@')[0]}</h2>
-                    <p style={{color:'var(--text-muted)', marginBottom:0}}>{user.rol === 'fan' ? 'Zona de Fans' : 'Panel de Control'}</p>
-                </div>
-
-                <h3 style={{fontSize:'1rem', color:'var(--primary)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'10px'}}>Torneo</h3>
+                {/* DASHBOARD GENERAL (PARA TODOS) */}
+                <h3 className="section-title">Torneo</h3>
                 <div className="dashboard-grid">
-                    <div className="dashboard-card" onClick={()=>setCalendarView(true)}><div className="card-icon">📅</div><div className="card-title">Calendario</div></div>
-                    <div className="dashboard-card" onClick={()=>setStandingsView(true)}><div className="card-icon">🏆</div><div className="card-title">Tabla General</div></div>
-                    <div className="dashboard-card" onClick={()=>setStatsView(true)}><div className="card-icon">📊</div><div className="card-title">Líderes</div></div>
-                    <div className="dashboard-card" onClick={()=>setNewsFeedView(true)}><div className="card-icon">📢</div><div className="card-title">Novedades</div></div>
+                    <div className="dashboard-card" onClick={()=>setCalendarView(true)}>📅 Calendario</div>
+                    <div className="dashboard-card" onClick={()=>setStandingsView(true)}>🏆 Tabla General</div>
+                    <div className="dashboard-card" onClick={()=>setStatsView(true)}>📊 Estadísticas</div>
+                    <div className="dashboard-card" onClick={()=>setNewsFeedView(true)}>📢 Noticias</div>
                 </div>
 
+                {/* DASHBOARD DELEGADO */}
                 {user.rol === 'delegado' && (
                     <div style={{marginTop:'30px'}}>
-                        <h3 style={{fontSize:'1rem', color:'var(--primary)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'10px'}}>Mi Equipo</h3>
+                        <h3 className="section-title">Mi Gestión</h3>
                         <DelegadoDashboard formas21={formas21} userUid={user.uid} userEquipoId={user.equipoId||null} refreshData={refreshData} setViewRosterId={setViewRosterId} setSelectedFormId={setSelectedFormId} setSelectForma5MatchId={setSelectForma5MatchId} onRegister={() => setRegistroView(true)} />
                     </div>
                 )}
 
+                {/* DASHBOARD JUGADOR */}
                 {user.rol === 'jugador' && <div style={{marginTop:'30px'}}><JugadorDashboard userEquipoId={user.equipoId||null} userName={user.email} formas21={formas21} setViewRosterId={setViewRosterId} /></div>}
 
+                {/* DASHBOARD ADMIN */}
                 {user.rol === 'admin' && (
                     <div style={{marginTop:'30px'}}>
-                        <h3 style={{fontSize:'1rem', color:'var(--primary)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'10px'}}>Admin</h3>
+                        <h3 className="section-title">Administración</h3>
                         <div className="dashboard-grid">
-                            <div className="dashboard-card" onClick={()=>setMesaTecnicaView(true)}><div className="card-icon">🏀</div><div className="card-title">Mesa Técnica</div></div>
-                            <div className="dashboard-card" onClick={()=>setNewsAdminView(true)} style={{border:'2px solid var(--accent)'}}><div className="card-icon" style={{filter:'none'}}>✍️</div><div className="card-title" style={{color:'var(--accent)'}}>Publicar Info</div></div>
-                            <div className="dashboard-card" onClick={()=>setAdminFormView(true)}><div className="card-icon">📋</div><div className="card-title">Gestionar F-21</div></div>
-                            <div className="dashboard-card" onClick={()=>setUsersView(true)}><div className="card-icon">👥</div><div className="card-title">Usuarios</div></div>
-                            <div className="dashboard-card" onClick={()=>setMatchView(true)}><div className="card-icon">🖊️</div><div className="card-title">Marcador Manual</div></div>
+                            <div className="dashboard-card admin" onClick={()=>setMesaTecnicaView(true)}>🏀 Mesa Técnica</div>
+                            <div className="dashboard-card admin" onClick={()=>setNewsAdminView(true)}>✍️ Noticias</div>
+                            <div className="dashboard-card admin" onClick={()=>setAdminFormView(true)}>📋 Inscripciones</div>
+                            <div className="dashboard-card admin" onClick={()=>setUsersView(true)}>👥 Usuarios</div>
+                            <div className="dashboard-card admin" onClick={()=>setMatchView(true)}>🖊️ Marcador Manual</div>
                         </div>
                     </div>
                 )}
