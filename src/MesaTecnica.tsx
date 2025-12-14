@@ -2,13 +2,14 @@ import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
 import { db } from './firebase';
 import { doc, updateDoc, onSnapshot, collection, query, getDocs, setDoc, increment } from 'firebase/firestore';
 
+// --- INTERFACES ---
 interface Player { id: string; nombre: string; numero: number; equipoId: string; }
 interface GameEvent { 
     id: string; 
     text: string; 
     time: string; 
     team: 'local'|'visitante'|'system'; 
-    type: 'score'|'stat'|'foul'|'sub'|'period'|'timeout'|'system'; // Se añadió 'system'
+    type: 'score'|'stat'|'foul'|'sub'|'period'|'timeout'|'system'; 
 }
 interface PlayerGameStats {
     puntos: number;
@@ -31,6 +32,7 @@ interface MatchData {
     gameLog?: GameEvent[];
 }
 
+// --- 1. RELOJ AISLADO ---
 const ClockDisplay = memo(({ 
     timeLeft, isRunning, periodo, onToggle, onNextQuarter, onAdjust 
 }: { 
@@ -88,6 +90,7 @@ const ClockDisplay = memo(({
     );
 });
 
+// --- 2. FILA DE JUGADOR ---
 const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub }: any) => {
     const isExpulsado = stats?.expulsado;
     const faltas = stats?.faltasTotales || 0;
@@ -162,6 +165,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
     const [benchModalOpen, setBenchModalOpen] = useState<'local' | 'visitante' | null>(null);
 
+    // 1. CARGAR PARTIDOS
     useEffect(() => {
         const fetchMatches = async () => {
             const q = query(collection(db, 'calendario')); 
@@ -175,6 +179,18 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         if (!selectedMatchId) fetchMatches();
     }, [selectedMatchId]);
 
+    // 2. ACTIVAR MODO 'VIVO' AL ENTRAR AL PARTIDO (¡LA SOLUCIÓN!)
+    useEffect(() => {
+        if (selectedMatchId && matchData) {
+            // Si el estatus es 'programado', lo pasamos a 'vivo' automáticamente
+            // para que los fans puedan verlo en su dashboard.
+            if (matchData.estatus === 'programado') {
+                updateDoc(doc(db, 'calendario', selectedMatchId), { estatus: 'vivo' });
+            }
+        }
+    }, [selectedMatchId, matchData?.estatus]); // Dependencia clave
+
+    // 3. RELOJ
     useEffect(() => {
         if (isRunning && timeLeft > 0) {
             timerRef.current = setInterval(() => {
@@ -202,6 +218,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         });
     }, []);
 
+    // 4. ESCUCHAR DATOS
     useEffect(() => {
         if (!selectedMatchId) return;
         const unsub = onSnapshot(doc(db, 'calendario', selectedMatchId), (docSnap) => {
@@ -229,6 +246,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         return () => unsub();
     }, [selectedMatchId]);
 
+    // 5. INICIALIZAR ROSTERS
     useEffect(() => {
         if (matchData && localOnCourt.length === 0 && localBench.length === 0) {
             const rosterL = matchData.forma5?.[matchData.equipoLocalId] || [];
