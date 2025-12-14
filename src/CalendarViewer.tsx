@@ -64,9 +64,8 @@ const CalendarViewer: React.FC<{
                     } as Match;
                 });
 
+                // Ordenamiento general
                 matches.sort((a, b) => {
-                    if (a.estatus === 'vivo' && b.estatus !== 'vivo') return -1;
-                    if (a.estatus !== 'vivo' && b.estatus === 'vivo') return 1;
                     if ((a.jornada || 0) !== (b.jornada || 0)) return (a.jornada || 0) - (b.jornada || 0);
                     return a.fecha.localeCompare(b.fecha);
                 });
@@ -83,20 +82,13 @@ const CalendarViewer: React.FC<{
 
 
     const handleGenerateCalendar = async () => {
-        const confirmacion = window.confirm(
-            "⚠️ ¿REINICIAR TORNEO?\n\nSe borrará todo el calendario, estadísticas y tabla de posiciones."
-        );
-
-        if (!confirmacion) return;
-        
+        if (!window.confirm("⚠️ ¿REINICIAR TORNEO? Se borrará todo.")) return;
         setGenerating(true);
         try {
             const oldMatches = await getDocs(collection(db, 'calendario'));
             await Promise.all(oldMatches.docs.map((d: any) => deleteDoc(d.ref)));
-
             const oldStats = await getDocs(collection(db, 'stats_partido'));
             await Promise.all(oldStats.docs.map((d: any) => deleteDoc(d.ref)));
-
             const equiposSnap = await getDocs(query(collection(db, 'equipos')));
             await Promise.all(equiposSnap.docs.map((d: any) => updateDoc(d.ref, { victorias: 0, derrotas: 0, puntos: 0, puntos_favor: 0, puntos_contra: 0 })));
 
@@ -129,7 +121,7 @@ const CalendarViewer: React.FC<{
                 }
                 equipos.splice(1, 0, equipos.pop()!); 
             }
-            alert("✅ Torneo reiniciado correctamente.");
+            alert("✅ Torneo reiniciado.");
         } catch (error) { console.error(error); alert("Error."); } finally { setGenerating(false); }
     };
 
@@ -138,12 +130,16 @@ const CalendarViewer: React.FC<{
         await deleteDoc(doc(db, 'calendario', id));
     };
 
-    let filteredMatches = partidos;
-    if (filter === 'programados') filteredMatches = partidos.filter(p => p.estatus !== 'finalizado');
-    else if (filter === 'finalizados') filteredMatches = partidos.filter(p => p.estatus === 'finalizado');
+    // --- SEPARAR JUEGOS EN VIVO DEL RESTO ---
+    const liveMatches = partidos.filter(p => p.estatus === 'vivo');
+    
+    // Filtrar el resto para la lista de abajo
+    let listMatches = partidos.filter(p => p.estatus !== 'vivo');
+    if (filter === 'programados') listMatches = listMatches.filter(p => p.estatus !== 'finalizado');
+    else if (filter === 'finalizados') listMatches = listMatches.filter(p => p.estatus === 'finalizado');
 
     const grouped: Record<string, Match[]> = {};
-    filteredMatches.forEach(m => {
+    listMatches.forEach(m => {
         const key = `Jornada ${m.jornada || 1}`;
         if (!grouped[key]) grouped[key] = [];
         grouped[key].push(m);
@@ -158,16 +154,72 @@ const CalendarViewer: React.FC<{
 
     return (
         <div className="animate-fade-in" style={{maxWidth:'800px', margin:'0 auto'}}>
+            
             <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px', alignItems:'center'}}>
                 <h2 style={{color:'var(--primary)', margin:0, fontSize:'1.5rem'}}>📅 Calendario</h2>
                 {rol === 'admin' && (
-                    <button onClick={handleGenerateCalendar} disabled={generating} className="btn" style={{background: generating ? '#ccc' : '#ef4444', color: 'white', fontWeight: 'bold', fontSize: '0.9rem'}}>
-                        {generating ? '⚙️...' : '🔄 Reiniciar Torneo'}
+                    <button onClick={handleGenerateCalendar} disabled={generating} className="btn" style={{background: generating ? '#ccc' : '#ef4444', color: 'white', fontWeight: 'bold', fontSize: '0.8rem'}}>
+                        {generating ? '⚙️...' : '🔄 Reiniciar'}
                     </button>
                 )}
                 <button onClick={onClose} className="btn btn-secondary">← Volver</button>
             </div>
 
+            {/* --- SECCIÓN HERO: PARTIDOS EN VIVO (GAMECAST) --- */}
+            {liveMatches.length > 0 && (
+                <div style={{marginBottom:'30px'}}>
+                    <h3 style={{color:'#ef4444', marginBottom:'10px', display:'flex', alignItems:'center', gap:'10px', animation:'pulse 2s infinite'}}>
+                        🔴 EN JUEGO AHORA
+                    </h3>
+                    <div style={{display:'grid', gap:'15px'}}>
+                        {liveMatches.map(match => (
+                            <div key={match.id} className="card" style={{
+                                padding:'20px', 
+                                background: 'linear-gradient(135deg, #111 0%, #222 100%)', // Fondo oscuro para resaltar
+                                color: 'white',
+                                border:'2px solid #ef4444',
+                                boxShadow: '0 0 15px rgba(239, 68, 68, 0.4)'
+                            }}>
+                                <div style={{textAlign:'center', marginBottom:'15px', fontSize:'0.9rem', color:'#fbbf24', fontWeight:'bold'}}>
+                                    🔥 GAMECAST EN VIVO
+                                </div>
+                                
+                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px'}}>
+                                    {/* Local */}
+                                    <div style={{display:'flex', flexDirection:'column', alignItems:'center', flex:1}}>
+                                        {renderLogo(match.logoUrlA)}
+                                        <span style={{marginTop:'5px', fontWeight:'bold', textAlign:'center', fontSize:'1.1rem'}}>{match.equipoA}</span>
+                                        <span style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{match.resultadoA}</span>
+                                    </div>
+
+                                    <div style={{padding:'0 10px', fontSize:'1.2rem', color:'#666'}}>VS</div>
+
+                                    {/* Visitante */}
+                                    <div style={{display:'flex', flexDirection:'column', alignItems:'center', flex:1}}>
+                                        {renderLogo(match.logoUrlB)}
+                                        <span style={{marginTop:'5px', fontWeight:'bold', textAlign:'center', fontSize:'1.1rem'}}>{match.equipoB}</span>
+                                        <span style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{match.resultadoB}</span>
+                                    </div>
+                                </div>
+
+                                <button 
+                                    onClick={() => onViewLive(match.id)} 
+                                    className="btn" 
+                                    style={{
+                                        width:'100%', background:'#ef4444', color:'white', fontWeight:'bold', 
+                                        padding:'12px', fontSize:'1rem', textTransform:'uppercase', letterSpacing:'1px',
+                                        display:'flex', justifyContent:'center', alignItems:'center', gap:'10px'
+                                    }}
+                                >
+                                    📺 Entrar a Transmisión
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* --- FILTROS PARA EL RESTO --- */}
             <div style={{display:'flex', gap:'10px', marginBottom:'20px', overflowX:'auto', paddingBottom:'5px'}}>
                 <button className={`btn ${filter==='todos'?'btn-primary':'btn-secondary'}`} onClick={()=>setFilter('todos')}>Todos</button>
                 <button className={`btn ${filter==='programados'?'btn-primary':'btn-secondary'}`} onClick={()=>setFilter('programados')}>Pendientes</button>
@@ -175,28 +227,24 @@ const CalendarViewer: React.FC<{
             </div>
 
             {loading ? <div style={{textAlign:'center', padding:'40px'}}>Cargando...</div> : 
-             Object.keys(grouped).length === 0 ? <div className="card" style={{textAlign:'center', padding:'30px'}}>No hay partidos.</div> : (
+             (Object.keys(grouped).length === 0 && liveMatches.length === 0) ? <div className="card" style={{textAlign:'center', padding:'30px'}}>No hay partidos.</div> : (
                 sortedKeys.map(jornada => (
                     <div key={jornada} style={{marginBottom:'30px'}}>
-                        <h3 style={{background: 'var(--primary)', color:'white', padding:'10px 15px', borderRadius:'8px', fontSize:'1rem', marginBottom:'10px'}}>
-                            {jornada} <span style={{fontSize:'0.8rem', opacity:0.8, marginLeft:'10px'}}>{new Date(grouped[jornada][0].fecha + 'T12:00:00').toLocaleDateString()}</span>
+                        <h3 style={{background: 'var(--primary)', color:'white', padding:'8px 15px', borderRadius:'8px', fontSize:'1rem', marginBottom:'10px'}}>
+                            {jornada}
                         </h3>
                         <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
                             {grouped[jornada].map(match => (
                                 <div key={match.id} className="card match-card" style={{
                                     padding:'15px', display:'flex', flexDirection:'column', gap:'10px',
-                                    borderLeft: match.estatus === 'vivo' ? '5px solid #ef4444' : match.estatus === 'finalizado' ? '5px solid #10b981' : '1px solid #eee'
+                                    borderLeft: match.estatus === 'finalizado' ? '5px solid #10b981' : '1px solid #eee'
                                 }}>
-                                    
-                                    {/* INFO SUPERIOR */}
                                     <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.8rem', color:'var(--text-muted)'}}>
                                         <span>📍 {match.cancha} - {match.hora}</span>
-                                        {match.estatus === 'vivo' && <span style={{color:'red', fontWeight:'bold', animation:'pulse 1s infinite'}}>🔴 EN VIVO</span>}
                                         {match.estatus === 'finalizado' && <span style={{color:'#10b981', fontWeight:'bold'}}>🏁 FINALIZADO</span>}
                                         {match.estatus === 'programado' && <span>📅 PROGRAMADO</span>}
                                     </div>
                                     
-                                    {/* EQUIPOS Y RESULTADO */}
                                     <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
                                         <div style={{display:'flex', alignItems:'center', gap:'10px', flex:1}}>
                                             {renderLogo(match.logoUrlA)}
@@ -207,7 +255,6 @@ const CalendarViewer: React.FC<{
                                             {match.estatus === 'programado' ? (
                                                 <span style={{color:'#ccc', fontSize:'1rem'}}>VS</span>
                                             ) : (
-                                                // MUESTRA EL MARCADOR SI ESTÁ EN VIVO O FINALIZADO
                                                 <span>{match.resultadoA} - {match.resultadoB}</span>
                                             )}
                                         </div>
@@ -218,28 +265,20 @@ const CalendarViewer: React.FC<{
                                         </div>
                                     </div>
 
-                                    {/* BOTONES DE ACCIÓN (LÓGICA ESTRICTA) */}
-                                    <div style={{display:'flex', gap:'10px', marginTop:'5px', paddingTop:'10px', borderTop:'1px solid #eee', justifyContent:'flex-end'}}>
-                                        
-                                        {/* 1. SI ESTÁ FINALIZADO: Ver Stats */}
-                                        {match.estatus === 'finalizado' && (
+                                    {match.estatus === 'finalizado' && (
+                                        <div style={{display:'flex', marginTop:'5px', paddingTop:'10px', borderTop:'1px solid #eee', justifyContent:'flex-end'}}>
                                             <button onClick={()=>onViewDetail(match.id)} className="btn btn-secondary" style={{padding:'5px 12px', fontSize:'0.8rem'}}>
                                                 📊 Ver Stats
                                             </button>
-                                        )}
-                                        
-                                        {/* 2. SOLO SI ESTÁ EN VIVO: Ver Transmisión */}
-                                        {match.estatus === 'vivo' && (
-                                            <button onClick={()=>onViewLive(match.id)} className="btn btn-danger" style={{padding:'5px 12px', fontSize:'0.8rem', animation:'pulse 1.5s infinite'}}>
-                                                📺 VER EN VIVO
-                                            </button>
-                                        )}
-                                        
-                                        {/* ADMIN: BORRAR */}
-                                        {rol === 'admin' && (
-                                            <button onClick={()=>handleDelete(match.id)} className="btn" style={{padding:'5px 10px', fontSize:'0.8rem', background:'#fee2e2', color:'#ef4444'}}>🗑️</button>
-                                        )}
-                                    </div>
+                                        </div>
+                                    )}
+                                    
+                                    {/* Botón de Borrar (Solo Admin) */}
+                                    {rol === 'admin' && (
+                                        <div style={{textAlign:'right', marginTop:'5px'}}>
+                                            <button onClick={()=>handleDelete(match.id)} style={{background:'none', border:'none', cursor:'pointer', fontSize:'1.2rem'}}>🗑️</button>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
