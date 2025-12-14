@@ -26,7 +26,17 @@ import NewsAdmin from './NewsAdmin';
 import NewsFeed from './NewsFeed';   
 
 // Interfaces
-interface Equipo { id: string; nombre: string; victorias: number; derrotas: number; puntos_favor: number; puntos_contra?: number; puntos?: number; logoUrl?: string; }
+interface Equipo { 
+    id: string; 
+    nombre: string; 
+    victorias: number; 
+    derrotas: number; 
+    puntos_favor: number; 
+    puntos_contra?: number; 
+    puntos: number; // Obligatorio (number)
+    logoUrl?: string; 
+}
+
 interface UsuarioData extends DocumentData { uid: string; email: string | null; rol: 'admin' | 'delegado' | 'pendiente' | 'jugador' | 'fan'; equipoId?: string; }
 interface Forma21 extends DocumentData { id: string; delegadoId: string; nombreEquipo: string; fechaRegistro: { seconds: number }; rosterCompleto?: boolean; delegadoEmail?: string; aprobado?: boolean; logoUrl?: string; }
 
@@ -86,7 +96,15 @@ function App() {
     const loadData = async () => {
         try {
             const eqSnap = await getDocs(collection(db, "equipos"));
-            setEquipos(eqSnap.docs.map(d => ({ id: d.id, ...d.data() } as Equipo)));
+            setEquipos(eqSnap.docs.map(d => {
+                const data = d.data();
+                return { 
+                    id: d.id, 
+                    ...data,
+                    // Conversión forzada a número para evitar errores de tipo
+                    puntos: Number(data.puntos || 0)
+                } as Equipo;
+            }));
 
             let q;
             if (user.rol === 'admin') q = query(collection(db, 'forma21s')); 
@@ -153,68 +171,34 @@ function App() {
       
       <main className="main-content" style={{padding: '20px', maxWidth: '1200px', margin: '0 auto'}}>
         
-        {/* RENDERIZADO DE VISTAS (MODALES Y PANTALLAS COMPLETAS) */}
-        
-        {/* Noticias */}
+        {/* RENDERIZADO DE VISTAS */}
         {newsFeedView && <NewsFeed onClose={() => setNewsFeedView(false)} />}
-        
-        {/* Partido en Vivo (Visor Público) */}
         {liveMatchId && <LiveGameViewer matchId={liveMatchId} onClose={() => setLiveMatchId(null)} />}
-        
-        {/* Detalle del Partido (Stats Finales) - AQUÍ ESTÁ LA MODIFICACIÓN CLAVE: rol={user.rol} */}
         {detailMatchId && <MatchDetailViewer matchId={detailMatchId} onClose={() => setDetailMatchId(null)} rol={user.rol} />}
         
-        {/* Calendario */}
-        {calendarView && <CalendarViewer rol={user.rol} userEquipoId={user.equipoId || null} onClose={() => setCalendarView(false)} onViewLive={(id) => { setCalendarView(false); setLiveMatchId(id); }} onViewDetail={(id) => { setCalendarView(false); setDetailMatchId(id); }} />}
+        {/* AQUÍ ESTABA EL ERROR 1: Eliminamos 'userEquipoId' de CalendarViewer */}
+        {calendarView && <CalendarViewer rol={user.rol} onClose={() => setCalendarView(false)} onViewLive={(id) => { setCalendarView(false); setLiveMatchId(id); }} onViewDetail={(id) => { setCalendarView(false); setDetailMatchId(id); }} />}
         
-        {/* Estadísticas Generales */}
         {statsView && <StatsViewer onClose={() => setStatsView(false)} />}
-        
-        {/* Tabla de Posiciones */}
         {standingsView && <StandingsViewer equipos={equipos} onClose={() => setStandingsView(false)} />}
-        
-        {/* Admin: Noticias */}
         {newsAdminView && <NewsAdmin onClose={() => setNewsAdminView(false)} />}
-        
-        {/* Visor Roster */}
         {viewRosterId && <RosterViewer forma21Id={viewRosterId} nombreEquipo={formas21.find(f=>f.id===viewRosterId)?.nombreEquipo || 'Equipo'} onClose={() => setViewRosterId(null)} />}
-        
-        {/* Admin: Marcador Manual */}
         {matchView && <MatchForm onSuccess={() => {setMatchView(false); refreshData();}} onClose={() => setMatchView(false)} />}
-        
-        {/* Admin: Inscripciones */}
         {adminFormView && <Forma21AdminViewer onClose={() => setAdminFormView(false)} setViewRosterId={setViewRosterId} />}
-        
-        {/* Admin: Usuarios */}
         {usersView && <UserManagement onClose={() => setUsersView(false)} />}
-        
-        {/* Delegado: Registro Equipo */}
         {registroView && <RegistroForma21 onSuccess={refreshData} onClose={() => setRegistroView(false)} />}
-        
-        {/* Delegado: Editar Forma 21 */}
         {selectedFormId && <RosterForm forma21Id={selectedFormId} nombreEquipo={formas21.find(f=>f.id===selectedFormId)?.nombreEquipo || 'Equipo'} onSuccess={() => {setSelectedFormId(null); refreshData();}} onClose={() => setSelectedFormId(null)} />}
-        
-        {/* Delegado: Selección Forma 5 */}
         {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || ''} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
-        
-        {/* Admin: Mesa Técnica */}
         {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={refreshData} />}
 
-        {/* --- DASHBOARD PRINCIPAL --- */}
+        {/* DASHBOARD PRINCIPAL */}
         {isDashboard && (
             <div className="animate-fade-in">
-                
-                {/* HERO SECTION */}
-                <div style={{
-                    background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)',
-                    borderRadius: '16px', padding: '30px', color: 'white', marginBottom: '40px',
-                    boxShadow: '0 10px 25px -5px rgba(59, 130, 246, 0.5)'
-                }}>
+                <div style={{background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', borderRadius: '16px', padding: '30px', color: 'white', marginBottom: '40px', boxShadow: '0 10px 25px -5px rgba(59, 130, 246, 0.5)'}}>
                     <h2 style={{margin: '0 0 10px 0', fontSize: '1.8rem'}}>Hola, {user.email?.split('@')[0]} 👋</h2>
                     <p style={{margin: 0, opacity: 0.9}}>Bienvenido al panel de control de la Liga Madera 15.</p>
                 </div>
 
-                {/* ZONA DE TORNEO (PÚBLICA) */}
                 <h3 style={{fontSize: '1.1rem', color: '#6b7280', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>Zona de Torneo</h3>
                 <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '20px', marginBottom: '40px'}}>
                     <DashboardCard title="Noticias" icon="📢" color="#ef4444" onClick={()=>setNewsFeedView(true)} />
@@ -223,36 +207,19 @@ function App() {
                     <DashboardCard title="Líderes" icon="📊" color="#10b981" onClick={()=>setStatsView(true)} />
                 </div>
 
-                {/* DASHBOARD DELEGADO */}
                 {user.rol === 'delegado' && (
                     <div style={{marginBottom: '40px'}}>
                         <h3 style={{fontSize: '1.1rem', color: '#6b7280', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>Mi Equipo</h3>
-                        <DelegadoDashboard 
-                            formas21={formas21} 
-                            userUid={user.uid} 
-                            userEquipoId={user.equipoId||null} 
-                            refreshData={refreshData} 
-                            setViewRosterId={setViewRosterId} 
-                            setSelectedFormId={setSelectedFormId} 
-                            setSelectForma5MatchId={setSelectForma5MatchId} 
-                            onRegister={() => setRegistroView(true)} 
-                        />
+                        <DelegadoDashboard formas21={formas21} userUid={user.uid} userEquipoId={user.equipoId||null} refreshData={refreshData} setViewRosterId={setViewRosterId} setSelectedFormId={setSelectedFormId} setSelectForma5MatchId={setSelectForma5MatchId} onRegister={() => setRegistroView(true)} />
                     </div>
                 )}
 
-                {/* DASHBOARD JUGADOR */}
                 {user.rol === 'jugador' && (
                     <div style={{marginTop:'30px'}}>
-                        <JugadorDashboard 
-                            userEquipoId={user.equipoId||null} 
-                            userName={user.email} 
-                            formas21={formas21} 
-                            setViewRosterId={setViewRosterId} 
-                        />
+                        <JugadorDashboard userEquipoId={user.equipoId||null} userName={user.email} formas21={formas21} setViewRosterId={setViewRosterId} />
                     </div>
                 )}
 
-                {/* DASHBOARD ADMIN */}
                 {user.rol === 'admin' && (
                     <div>
                         <h3 style={{fontSize: '1.1rem', color: '#6b7280', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>Panel Administrativo</h3>

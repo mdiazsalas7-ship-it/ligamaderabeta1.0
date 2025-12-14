@@ -2,219 +2,139 @@ import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { collection, getDocs } from 'firebase/firestore';
 
-interface PlayerStat { 
-    id: string; 
-    nombre: string; 
-    equipo: string; 
-    puntos: number; 
-    rebotes: number; 
-    asistencias: number; 
-    robos: number; 
-    bloqueos: number; 
-    partidos: number; 
-    valoracionTotal: number; 
-    valoracionPromedio: number; 
-    logoUrl?: string; 
+interface PlayerStat {
+    id: string; // ID único compuesto (partidoId_jugadorId)
+    jugadorId: string;
+    nombre: string;
+    equipo: string;
+    puntos: number;
+    rebotes: number;
+    asistencias: number;
+    robos: number;
+    bloqueos: number;
+    faltas: number;
+    triples: number;
+    partidosJugados: number;
+    logoUrl?: string;
 }
 
 const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-    const [stats, setStats] = useState<PlayerStat[]>([]);
-    const [mvp, setMvp] = useState<PlayerStat | null>(null);
+    const [leaders, setLeaders] = useState<{
+        puntos: PlayerStat[],
+        rebotes: PlayerStat[],
+        asistencias: PlayerStat[],
+        triples: PlayerStat[]
+    }>({ points: [], rebotes: [], asistencias: [], triples: [] } as any);
+    
     const [loading, setLoading] = useState(true);
-    const [tab, setTab] = useState<'puntos' | 'rebotes' | 'asistencias' | 'mvp'>('mvp'); 
 
     useEffect(() => {
         const fetchStats = async () => {
             try {
-                // 1. Directorio
-                const formasSnap = await getDocs(collection(db, 'forma21s'));
+                // 1. Obtener Logos de Equipos
+                const equiposSnap = await getDocs(collection(db, 'equipos'));
                 const teamLogos: Record<string, string> = {};
-                const playerDirectory: Record<string, {nombre: string, equipo: string}> = {};
-
-                for (const docForma of formasSnap.docs) {
-                    const data = docForma.data();
-                    const nombreEquipo = String(data.nombreEquipo || '').trim();
-                    if (nombreEquipo && data.logoUrl) teamLogos[nombreEquipo] = data.logoUrl;
-
-                    const jugSnap = await getDocs(collection(db, 'forma21s', docForma.id, 'jugadores'));
-                    jugSnap.forEach(j => {
-                        playerDirectory[j.id] = { nombre: j.data().nombre, equipo: nombreEquipo };
-                    });
-                }
-
-                // 2. Stats
-                const statsSnap = await getDocs(collection(db, 'stats_partido'));
-                if (statsSnap.empty) { setLoading(false); return; }
-
-                // 3. Sumar
-                const acumulado: Record<string, PlayerStat> = {};
-                
-                statsSnap.forEach(doc => {
-                    const s = doc.data();
-                    const pid = s.jugadorId;
-                    if (!pid) return;
-
-                    const info = playerDirectory[pid] || { nombre: s.nombre || 'Desconocido', equipo: s.equipo || 'Agente Libre' };
-
-                    if (!acumulado[pid]) {
-                        acumulado[pid] = {
-                            id: pid, nombre: info.nombre, equipo: info.equipo,
-                            puntos: 0, rebotes: 0, asistencias: 0, robos: 0, bloqueos: 0, 
-                            partidos: 0, valoracionTotal: 0, valoracionPromedio: 0,
-                            logoUrl: teamLogos[info.equipo] || null
-                        };
+                equiposSnap.forEach(d => {
+                    const data = d.data();
+                    if (data.nombre && data.logoUrl) {
+                        teamLogos[data.nombre] = data.logoUrl;
                     }
-                    
-                    const pts = Number(s.puntos || 0);
-                    const reb = Number(s.rebotes || 0);
-                    const ast = Number(s.asistencias || 0);
-                    const rob = Number(s.robos || 0);
-                    const blk = Number(s.bloqueos || 0);
-
-                    acumulado[pid].puntos += pts;
-                    acumulado[pid].rebotes += reb;
-                    acumulado[pid].asistencias += ast;
-                    acumulado[pid].robos += rob;
-                    acumulado[pid].bloqueos += blk;
-                    acumulado[pid].partidos += 1;
-                    
-                    // Valoración Simple (Eficiencia): Suma de todo lo positivo
-                    acumulado[pid].valoracionTotal += (pts + reb + ast + rob + blk);
                 });
 
-                const listaFinal = Object.values(acumulado).map(p => ({
-                    ...p,
-                    valoracionPromedio: p.partidos > 0 ? (p.valoracionTotal / p.partidos) : 0
-                }));
+                // 2. Obtener Todas las Stats
+                const statsSnap = await getDocs(collection(db, 'stats_partido'));
+                const rawStats: any[] = statsSnap.docs.map(d => d.data());
 
-                setStats(listaFinal);
+                // 3. Agrupar por Jugador
+                const aggregated: Record<string, PlayerStat> = {};
 
-                if (listaFinal.length > 0) {
-                    const topPlayer = [...listaFinal].sort((a,b) => b.valoracionPromedio - a.valoracionPromedio)[0];
-                    setMvp(topPlayer);
-                }
+                rawStats.forEach(stat => {
+                    if (!aggregated[stat.jugadorId]) {
+                        aggregated[stat.jugadorId] = {
+                            id: stat.jugadorId,
+                            jugadorId: stat.jugadorId,
+                            nombre: stat.nombre,
+                            equipo: stat.equipo,
+                            puntos: 0, rebotes: 0, asistencias: 0, robos: 0, bloqueos: 0, faltas: 0, triples: 0,
+                            partidosJugados: 0,
+                            logoUrl: undefined
+                        };
+                    }
+                    const acc = aggregated[stat.jugadorId];
+                    acc.puntos += (stat.puntos || 0);
+                    acc.rebotes += (stat.rebotes || 0);
+                    acc.asistencias += (stat.asistencias || 0);
+                    acc.robos += (stat.robos || 0);
+                    acc.bloqueos += (stat.bloqueos || 0);
+                    acc.faltas += (stat.faltas || 0);
+                    acc.triples += (stat.triples || 0);
+                    acc.partidosJugados += 1;
+                    // Asignar logo
+                    acc.logoUrl = teamLogos[stat.equipo] || undefined;
+                });
 
-            } catch (e) { console.error(e); } finally { setLoading(false); }
+                const allPlayers = Object.values(aggregated);
+
+                // 4. Ordenar Categorías (Top 10)
+                setLeaders({
+                    puntos: [...allPlayers].sort((a,b) => b.puntos - a.puntos).slice(0, 10),
+                    rebotes: [...allPlayers].sort((a,b) => b.rebotes - a.rebotes).slice(0, 10),
+                    asistencias: [...allPlayers].sort((a,b) => b.asistencias - a.asistencias).slice(0, 10),
+                    triples: [...allPlayers].sort((a,b) => b.triples - a.triples).slice(0, 10),
+                });
+
+            } catch (error) {
+                console.error(error);
+            } finally {
+                setLoading(false);
+            }
         };
         fetchStats();
     }, []);
 
-    const getAvg = (total: number, games: number) => games > 0 ? (total / games).toFixed(1) : '0.0';
-
-    const getSorted = () => {
-        const data = [...stats];
-        if (tab === 'mvp') return data.sort((a,b) => b.valoracionPromedio - a.valoracionPromedio);
-        if (tab === 'puntos') return data.sort((a,b) => (b.puntos/b.partidos) - (a.puntos/a.partidos));
-        if (tab === 'rebotes') return data.sort((a,b) => (b.rebotes/b.partidos) - (a.rebotes/a.partidos));
-        return data.sort((a,b) => (b.asistencias/b.partidos) - (a.asistencias/a.partidos));
-    };
-
-    const statsToShow = getSorted().slice(0, 20);
+    const LeaderCard = ({ title, data, icon, color }: any) => (
+        <div style={{background:'white', borderRadius:'12px', padding:'20px', boxShadow:'0 4px 6px rgba(0,0,0,0.05)', borderTop:`4px solid ${color}`}}>
+            <div style={{display:'flex', alignItems:'center', gap:'10px', marginBottom:'15px'}}>
+                <span style={{fontSize:'1.5rem'}}>{icon}</span>
+                <h3 style={{margin:0, color:'#374151', fontSize:'1.1rem'}}>{title}</h3>
+            </div>
+            <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
+                {data.map((p: PlayerStat, i: number) => (
+                    <div key={p.id} style={{display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom: i<9?'1px solid #f3f4f6':'none', paddingBottom: i<9?'8px':'0'}}>
+                        <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+                            <span style={{fontWeight:'bold', color: i===0?color:'#9ca3af', width:'20px'}}>{i+1}</span>
+                            {p.logoUrl && <img src={p.logoUrl} style={{width:'24px', height:'24px', borderRadius:'50%'}} alt=""/>}
+                            <div>
+                                <div style={{fontWeight:'bold', fontSize:'0.9rem', color:'#1f2937'}}>{p.nombre}</div>
+                                <div style={{fontSize:'0.75rem', color:'#6b7280'}}>{p.equipo}</div>
+                            </div>
+                        </div>
+                        <div style={{fontWeight:'bold', fontSize:'1.1rem', color:color}}>
+                            {title === 'Líderes en Puntos' ? p.puntos : 
+                             title === 'Rebotes' ? p.rebotes : 
+                             title === 'Asistencias' ? p.asistencias : p.triples}
+                        </div>
+                    </div>
+                ))}
+                {data.length === 0 && <div style={{color:'#999', textAlign:'center', fontSize:'0.9rem'}}>Sin datos</div>}
+            </div>
+        </div>
+    );
 
     return (
-        <div className="animate-fade-in" style={{maxWidth:'900px', margin:'0 auto', paddingBottom:'40px'}}>
-            
-            <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px', alignItems:'center'}}>
-                <h2 style={{color:'var(--primary)', margin:0, fontSize:'1.8rem'}}>📊 Estadísticas</h2>
+        <div className="animate-fade-in" style={{maxWidth:'1000px', margin:'0 auto'}}>
+            <div style={{display:'flex', justifyContent:'space-between', marginBottom:'30px', alignItems:'center'}}>
+                <h2 style={{color:'var(--primary)', margin:0, fontSize:'1.8rem'}}>📊 Estadísticas de la Liga</h2>
                 <button onClick={onClose} className="btn btn-secondary">← Volver</button>
             </div>
 
-            {loading ? <div style={{textAlign:'center', padding:'40px'}}>Cargando...</div> : stats.length === 0 ? <div className="card">Sin datos.</div> : (
-                <>
-                    {/* --- TARJETA DEL LÍDER ACTUAL (SOLO VISIBLE EN PESTAÑA MVP) --- */}
-                    {tab === 'mvp' && mvp && (
-                        <div className="card" style={{
-                            background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', 
-                            color: 'white', marginBottom: '30px', padding: '25px', 
-                            display: 'flex', alignItems: 'center', gap: '20px', position: 'relative', overflow: 'hidden',
-                            border: '2px solid #fbbf24', boxShadow: '0 10px 30px rgba(251, 191, 36, 0.2)'
-                        }}>
-                            <div style={{position:'absolute', right:'-20px', top:'-30px', fontSize:'12rem', opacity:0.05, transform:'rotate(-10deg)'}}>🏆</div>
-                            
-                            <div style={{width: '100px', height: '100px', borderRadius: '50%', border: '4px solid #fbbf24', overflow: 'hidden', background: 'white', flexShrink: 0, boxShadow: '0 0 15px rgba(251, 191, 36, 0.5)'}}>
-                                {mvp.logoUrl ? <img src={mvp.logoUrl} alt="MVP" style={{width:'100%', height:'100%', objectFit:'cover'}} /> : <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'3.5rem'}}>👑</div>}
-                            </div>
-
-                            <div style={{flex: 1, zIndex: 2}}>
-                                <div style={{color: '#fbbf24', fontWeight: 'bold', letterSpacing: '2px', fontSize: '0.8rem', marginBottom: '5px', textTransform: 'uppercase', background:'rgba(251, 191, 36, 0.1)', display:'inline-block', padding:'2px 8px', borderRadius:'4px'}}>Líder Carrera MVP</div>
-                                {/* CORRECCIÓN AQUÍ: Color blanco explícito */}
-                                <h2 style={{margin: '5px 0', fontSize: '1.8rem', lineHeight: 1.1, color: 'white'}}>{mvp.nombre}</h2>
-                                <div style={{color: '#94a3b8', fontSize: '1rem', display:'flex', alignItems:'center', gap:'5px'}}>
-                                    <span>{mvp.equipo}</span> • <span>VAL: {mvp.valoracionPromedio.toFixed(1)}</span>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* --- PESTAÑAS --- */}
-                    <div style={{display:'flex', gap:'10px', marginBottom:'20px', overflowX:'auto', paddingBottom:'5px'}}>
-                        <button onClick={()=>setTab('mvp')} className="btn" style={{
-                            flex:1, minWidth:'120px', fontWeight:'bold',
-                            background: tab==='mvp' ? '#fbbf24' : '#fff', 
-                            color: tab==='mvp' ? '#000' : '#666', 
-                            border: tab==='mvp' ? 'none' : '1px solid #ddd',
-                            boxShadow: tab==='mvp' ? '0 4px 10px rgba(251, 191, 36, 0.4)' : 'none'
-                        }}>
-                            🏆 Carrera MVP
-                        </button>
-                        
-                        {['puntos', 'rebotes', 'asistencias'].map(t => (
-                            <button key={t} onClick={()=>setTab(t as any)} className="btn" style={{
-                                flex:1, minWidth:'100px', textTransform:'capitalize',
-                                background: tab===t?'var(--primary)':'#eee', 
-                                color: tab===t?'white':'#666'
-                            }}>
-                                {t === 'puntos' ? '🔥 Puntos' : t === 'rebotes' ? '🏀 Rebotes' : '🅰️ Asistencias'}
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* --- TABLA DE LÍDERES --- */}
-                    <div className="card" style={{padding:0, overflowX:'auto'}}>
-                        <table style={{width:'100%', borderCollapse:'collapse'}}>
-                            <thead>
-                                <tr style={{background:'var(--primary)', color:'white', textAlign:'left'}}>
-                                    <th style={{padding:'15px', textAlign:'center'}}>#</th>
-                                    <th style={{padding:'15px'}}>Jugador</th>
-                                    <th style={{padding:'15px'}}>Equipo</th>
-                                    <th style={{padding:'15px', textAlign:'center'}}>PJ</th>
-                                    <th style={{padding:'15px', textAlign:'center', background: tab==='mvp'?'#fbbf24':'var(--accent)', color: tab==='mvp'?'black':'white', width:'110px'}}>
-                                        {tab === 'mvp' ? 'VAL (Avg)' : 'Promedio'}
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {statsToShow.map((s, i) => (
-                                    <tr key={s.id} style={{borderBottom:'1px solid #eee', background: i%2===0?'white':'#f9fafb'}}>
-                                        <td style={{padding:'15px', textAlign:'center', fontWeight:'bold', color: i<3?(tab==='mvp'?'#fbbf24':'var(--accent)'):'#ccc'}}>{i+1}</td>
-                                        <td style={{padding:'15px', fontWeight:'600'}}>{s.nombre}</td>
-                                        <td style={{padding:'15px', display:'flex', alignItems:'center', gap:'8px'}}>
-                                            {s.logoUrl && <img src={s.logoUrl} style={{width:'24px', height:'24px', borderRadius:'50%'}} />}
-                                            <span style={{fontSize:'0.9rem'}}>{s.equipo}</span>
-                                        </td>
-                                        <td style={{padding:'15px', textAlign:'center', color:'#666'}}>{s.partidos}</td>
-                                        <td style={{
-                                            padding:'15px', textAlign:'center', fontWeight:'900', fontSize:'1.2rem', 
-                                            color: tab==='mvp'?'#000':'var(--primary)', 
-                                            background: tab==='mvp'?'#fffbeb':'#fff7ed'
-                                        }}>
-                                            {tab === 'mvp' ? s.valoracionPromedio.toFixed(1) : 
-                                             tab === 'puntos' ? getAvg(s.puntos, s.partidos) : 
-                                             tab === 'rebotes' ? getAvg(s.rebotes, s.partidos) : 
-                                             getAvg(s.asistencias, s.partidos)}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                    
-                    {tab === 'mvp' && (
-                        <p style={{textAlign:'center', fontSize:'0.8rem', color:'#888', marginTop:'15px'}}>
-                            * La valoración (VAL) se calcula sumando Puntos + Rebotes + Asistencias + Robos + Bloqueos, dividido por partidos jugados.
-                        </p>
-                    )}
-                </>
+            {loading ? <div style={{textAlign:'center', padding:'50px'}}>Cargando estadísticas...</div> : (
+                <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(300px, 1fr))', gap:'20px'}}>
+                    <LeaderCard title="Líderes en Puntos" data={leaders.puntos} icon="🔥" color="#ef4444" />
+                    <LeaderCard title="Rebotes" data={leaders.rebotes} icon="🖐️" color="#10b981" />
+                    <LeaderCard title="Asistencias" data={leaders.asistencias} icon="🅰️" color="#3b82f6" />
+                    <LeaderCard title="Triples" data={leaders.triples} icon="🎯" color="#8b5cf6" />
+                </div>
             )}
         </div>
     );

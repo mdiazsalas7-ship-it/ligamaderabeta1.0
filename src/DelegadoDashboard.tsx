@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 interface Forma21 { 
     id: string; 
@@ -18,7 +18,7 @@ interface Match {
     hora: string;
     estatus: string;
     cancha: string;
-    esLocal: boolean; // Para saber si el delegado es local o visitante
+    esLocal: boolean;
 }
 
 interface DelegadoDashboardProps {
@@ -28,31 +28,26 @@ interface DelegadoDashboardProps {
     refreshData: () => void;
     setViewRosterId: (id: string) => void;
     setSelectedFormId: (id: string) => void;
-    setSelectForma5MatchId: (id: string) => void; // Esta es la función clave
+    setSelectForma5MatchId: (id: string) => void;
     onRegister: () => void;
 }
 
 const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({ 
-    formas21, userUid, userEquipoId, refreshData, 
+    formas21, userEquipoId,
     setViewRosterId, setSelectedFormId, setSelectForma5MatchId, onRegister 
 }) => {
     
     const [matches, setMatches] = useState<Match[]>([]);
     const [loadingMatches, setLoadingMatches] = useState(false);
 
-    // 1. CARGAR PRÓXIMOS PARTIDOS DEL EQUIPO
     useEffect(() => {
         const fetchMyMatches = async () => {
             if (!userEquipoId) return;
             setLoadingMatches(true);
             try {
-                // Buscamos partidos donde el equipo es Local o Visitante
-                // Nota: Firestore no permite OR lógico simple en una query, hacemos 2 y unimos.
-                
                 const matchesFound: Match[] = [];
                 const calRef = collection(db, 'calendario');
 
-                // Query 1: Como Local
                 const q1 = query(calRef, where('equipoLocalId', '==', userEquipoId));
                 const snap1 = await getDocs(q1);
                 snap1.forEach(d => {
@@ -71,13 +66,11 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
                     }
                 });
 
-                // Query 2: Como Visitante
                 const q2 = query(calRef, where('equipoVisitanteId', '==', userEquipoId));
                 const snap2 = await getDocs(q2);
                 snap2.forEach(d => {
                     const data = d.data();
                     if (data.estatus === 'programado') {
-                        // Evitar duplicados si por error ID local == ID visitante
                         if (!matchesFound.find(m => m.id === d.id)) {
                             matchesFound.push({
                                 id: d.id,
@@ -93,7 +86,6 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
                     }
                 });
 
-                // Ordenar por fecha
                 matchesFound.sort((a,b) => a.fechaAsignada.localeCompare(b.fechaAsignada));
                 setMatches(matchesFound);
 
@@ -107,9 +99,6 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
         fetchMyMatches();
     }, [userEquipoId]);
 
-    // --- RENDERIZADO ---
-
-    // Si no tiene equipo inscrito
     if (formas21.length === 0) {
         return (
             <div className="card" style={{textAlign:'center', padding:'40px'}}>
@@ -122,7 +111,7 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
         );
     }
 
-    const miEquipo = formas21[0]; // Asumimos 1 equipo por delegado
+    const miEquipo = formas21[0];
 
     return (
         <div className="animate-fade-in">

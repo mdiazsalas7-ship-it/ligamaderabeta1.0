@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, query, doc, deleteDoc, updateDoc, addDoc, onSnapshot } from 'firebase/firestore';
+import { collection, query, doc, deleteDoc, updateDoc, addDoc, onSnapshot, getDocs } from 'firebase/firestore';
 
 interface Match { 
     id: string; 
@@ -21,11 +21,10 @@ interface Match {
 
 const CalendarViewer: React.FC<{ 
     rol: string, 
-    userEquipoId: string | null, 
     onClose: () => void, 
     onViewLive: (id: string) => void, 
     onViewDetail: (id: string) => void 
-}> = ({ rol, userEquipoId, onClose, onViewLive, onViewDetail }) => {
+}> = ({ rol, onClose, onViewLive, onViewDetail }) => {
     
     const [partidos, setPartidos] = useState<Match[]>([]);
     const [loading, setLoading] = useState(true);
@@ -34,7 +33,6 @@ const CalendarViewer: React.FC<{
 
     // --- CARGA DE DATOS EN TIEMPO REAL ---
     useEffect(() => {
-        // 1. Escuchamos la colección 'equipos' para tener los logos siempre listos
         const unsubEquipos = onSnapshot(collection(db, 'equipos'), (eqSnap) => {
             const equipoLogos: Record<string, string> = {};
             eqSnap.forEach(d => {
@@ -42,17 +40,12 @@ const CalendarViewer: React.FC<{
                 if (data.nombre && data.logoUrl) equipoLogos[String(data.nombre).trim()] = data.logoUrl;
             });
 
-            // 2. Escuchamos la colección 'calendario' en tiempo real
-            // Esto asegura que si la mesa cambia algo, aquí se ve INSTANTÁNEAMENTE
             const q = query(collection(db, 'calendario'));
             const unsubCalendar = onSnapshot(q, (calSnap) => {
                 
                 const matches = calSnap.docs.map(d => {
                     const data = d.data();
-                    
-                    // Aseguramos que el estatus sea correcto
                     let estatus = data.estatus || 'programado';
-                    
                     return { 
                         id: d.id, 
                         equipoA: data.equipoLocalNombre || 'Local',
@@ -63,7 +56,6 @@ const CalendarViewer: React.FC<{
                         categoria: data.categoria || 'General',
                         rama: data.rama || 'Mixto',
                         estatus: estatus,
-                        // Leemos el marcador DIRECTAMENTE de la base de datos
                         resultadoA: data.marcadorLocal || 0,
                         resultadoB: data.marcadorVisitante || 0,
                         jornada: data.jornada || 1,
@@ -72,7 +64,6 @@ const CalendarViewer: React.FC<{
                     } as Match;
                 });
 
-                // Ordenar: En Vivo primero, luego pendientes, luego finalizados
                 matches.sort((a, b) => {
                     if (a.estatus === 'vivo' && b.estatus !== 'vivo') return -1;
                     if (a.estatus !== 'vivo' && b.estatus === 'vivo') return 1;
@@ -87,12 +78,10 @@ const CalendarViewer: React.FC<{
             return () => unsubCalendar();
         });
 
-        // Cleanup function
         return () => unsubEquipos();
     }, []);
 
 
-    // --- GENERADOR DE CALENDARIO ---
     const handleGenerateCalendar = async () => {
         const confirmacion = window.confirm(
             "⚠️ ¿REINICIAR TORNEO?\n\nSe borrará todo el calendario, estadísticas y tabla de posiciones."
@@ -102,20 +91,16 @@ const CalendarViewer: React.FC<{
         
         setGenerating(true);
         try {
-            // Borrar Calendario
             const oldMatches = await getDocs(collection(db, 'calendario'));
-            await Promise.all(oldMatches.docs.map(d => deleteDoc(d.ref)));
+            await Promise.all(oldMatches.docs.map((d: any) => deleteDoc(d.ref)));
 
-            // Borrar Stats
             const oldStats = await getDocs(collection(db, 'stats_partido'));
-            await Promise.all(oldStats.docs.map(d => deleteDoc(d.ref)));
+            await Promise.all(oldStats.docs.map((d: any) => deleteDoc(d.ref)));
 
-            // Resetear Tabla
             const equiposSnap = await getDocs(query(collection(db, 'equipos')));
-            await Promise.all(equiposSnap.docs.map(d => updateDoc(d.ref, { victorias: 0, derrotas: 0, puntos: 0, puntos_favor: 0, puntos_contra: 0 })));
+            await Promise.all(equiposSnap.docs.map((d: any) => updateDoc(d.ref, { victorias: 0, derrotas: 0, puntos: 0, puntos_favor: 0, puntos_contra: 0 })));
 
-            // Generar Partidos (Round Robin)
-            let equipos = equiposSnap.docs.map(d => ({ id: d.id, nombre: d.data().nombre }));
+            let equipos = equiposSnap.docs.map((d: any) => ({ id: d.id, nombre: d.data().nombre }));
             if (equipos.length < 2) { alert("Faltan equipos."); setGenerating(false); return; }
             if (equipos.length % 2 !== 0) equipos.push({ id: 'bye', nombre: 'DESCANSO' });
 
@@ -138,7 +123,7 @@ const CalendarViewer: React.FC<{
                             equipoVisitanteNombre: away.nombre, equipoVisitanteId: away.id,
                             fechaAsignada: fechaStr, hora: '12:00', cancha: 'Gimnasio Principal',
                             jornada: round + 1, categoria: 'General', rama: 'Mixto', estatus: 'programado',
-                            marcadorLocal: 0, marcadorVisitante: 0 // Inician en 0
+                            marcadorLocal: 0, marcadorVisitante: 0 
                         });
                     }
                 }
@@ -153,7 +138,6 @@ const CalendarViewer: React.FC<{
         await deleteDoc(doc(db, 'calendario', id));
     };
 
-    // --- FILTRADO ---
     let filteredMatches = partidos;
     if (filter === 'programados') filteredMatches = partidos.filter(p => p.estatus !== 'finalizado');
     else if (filter === 'finalizados') filteredMatches = partidos.filter(p => p.estatus === 'finalizado');

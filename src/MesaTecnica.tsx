@@ -2,9 +2,14 @@ import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
 import { db } from './firebase';
 import { doc, updateDoc, onSnapshot, collection, query, getDocs, setDoc, increment } from 'firebase/firestore';
 
-// --- INTERFACES ---
 interface Player { id: string; nombre: string; numero: number; equipoId: string; }
-interface GameEvent { id: string; text: string; time: string; team: 'local'|'visitante'|'system'; type: 'score'|'stat'|'foul'|'sub'|'period'|'timeout'; }
+interface GameEvent { 
+    id: string; 
+    text: string; 
+    time: string; 
+    team: 'local'|'visitante'|'system'; 
+    type: 'score'|'stat'|'foul'|'sub'|'period'|'timeout'|'system'; // Se añadió 'system'
+}
 interface PlayerGameStats {
     puntos: number;
     faltasPersonales: number;
@@ -26,7 +31,6 @@ interface MatchData {
     gameLog?: GameEvent[];
 }
 
-// --- 1. RELOJ AISLADO ---
 const ClockDisplay = memo(({ 
     timeLeft, isRunning, periodo, onToggle, onNextQuarter, onAdjust 
 }: { 
@@ -84,7 +88,6 @@ const ClockDisplay = memo(({
     );
 });
 
-// --- 2. FILA DE JUGADOR ---
 const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub }: any) => {
     const isExpulsado = stats?.expulsado;
     const faltas = stats?.faltasTotales || 0;
@@ -139,7 +142,6 @@ const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub }: any
 
 
 const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void }> = ({ onClose, onMatchFinalized }) => {
-    // ESTADOS
     const [matches, setMatches] = useState<any[]>([]);
     const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
     const [matchData, setMatchData] = useState<MatchData | null>(null);
@@ -160,7 +162,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
     const [benchModalOpen, setBenchModalOpen] = useState<'local' | 'visitante' | null>(null);
 
-    // Cargar Partidos
     useEffect(() => {
         const fetchMatches = async () => {
             const q = query(collection(db, 'calendario')); 
@@ -174,7 +175,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         if (!selectedMatchId) fetchMatches();
     }, [selectedMatchId]);
 
-    // LÓGICA DEL RELOJ
     useEffect(() => {
         if (isRunning && timeLeft > 0) {
             timerRef.current = setInterval(() => {
@@ -202,7 +202,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         });
     }, []);
 
-    // ESCUCHAR FIREBASE
     useEffect(() => {
         if (!selectedMatchId) return;
         const unsub = onSnapshot(doc(db, 'calendario', selectedMatchId), (docSnap) => {
@@ -230,7 +229,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         return () => unsub();
     }, [selectedMatchId]);
 
-    // INICIALIZAR ROSTERS
     useEffect(() => {
         if (matchData && localOnCourt.length === 0 && localBench.length === 0) {
             const rosterL = matchData.forma5?.[matchData.equipoLocalId] || [];
@@ -264,27 +262,19 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await updateDoc(doc(db, 'calendario', matchData.id), { gameLog: newLog });
     };
 
-    // --- REGLA FIBA: PÉRDIDA DE TIEMPO MUERTO (ÚLTIMOS 2 MIN Q4) ---
     useEffect(() => {
         if (!matchData) return;
-        
-        // 1200 decimas = 2 minutos
         if (matchData.cuarto === 4 && timeLeft <= 1200) {
             const updates: any = {};
             let msg = '';
-
-            // Si Local tiene 3, se le quita 1 -> Quedan 2
             if (matchData.timeoutsLocal === 3) {
                 updates.timeoutsLocal = 2;
-                msg += `Regla FIBA: ${matchData.equipoLocalNombre} pierde 1 TM (Max 2 ult. 2min). `;
+                msg += `Regla FIBA: ${matchData.equipoLocalNombre} pierde 1 TM. `;
             }
-
-            // Si Visitante tiene 3, se le quita 1 -> Quedan 2
             if (matchData.timeoutsVisitante === 3) {
                 updates.timeoutsVisitante = 2;
-                msg += `Regla FIBA: ${matchData.equipoVisitanteNombre} pierde 1 TM (Max 2 ult. 2min).`;
+                msg += `Regla FIBA: ${matchData.equipoVisitanteNombre} pierde 1 TM.`;
             }
-
             if (Object.keys(updates).length > 0) {
                 updateDoc(doc(db, 'calendario', matchData.id), updates);
                 if (msg) addLog(msg, 'system', 'system');
@@ -292,7 +282,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         }
     }, [timeLeft, matchData]);
 
-    // REGLAS EXPULSION
     const checkExpulsion = (s: PlayerGameStats) => {
         if (s.faltasTotales >= 5) return true;
         if (s.faltasAntideportivas >= 2) return true;
@@ -301,7 +290,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         return false;
     };
 
-    // --- MANEJO DE ESTADÍSTICAS ---
     const handleStat = useCallback(async (player: Player, team: 'local'|'visitante', action: 'puntos'|'rebotes'|'asistencias'|'falta_P'|'falta_T'|'falta_U', val: number) => {
         if (!matchData) return;
         if (statsCache[player.id]?.expulsado) return; 
@@ -312,12 +300,10 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         let logText = '';
         let statField = ''; 
 
-        // DETENER RELOJ (BOLA MUERTA)
         if (action.startsWith('falta')) {
             setIsRunning(false);
         }
         if (action === 'puntos') {
-            // Detener reloj si quedan menos de 2 min en Q4 o Prórroga
             const isCrunchTime = matchData.cuarto >= 4 && timeLeftRef.current <= 1200; 
             if (isCrunchTime) {
                 setIsRunning(false);
@@ -353,7 +339,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             if (checkExpulsion(newStats)) {
                 newStats.expulsado = true;
                 logText += " (EXPULSADO)";
-                alert(`🟥 JUGADOR EXPULSADO: ${player.nombre}\n\nDebe ser sustituido.`);
+                alert(`🟥 EXPULSADO: ${player.nombre}\n\nDebe ser sustituido.`);
             }
 
         } else {
@@ -422,7 +408,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         
         let updatePayload: any = { cuarto: increment(1) };
         
-        // RESET DE TIEMPOS MUERTOS FIBA
         if (nextQ === 3) {
             updatePayload.timeoutsLocal = 3;
             updatePayload.timeoutsVisitante = 3;

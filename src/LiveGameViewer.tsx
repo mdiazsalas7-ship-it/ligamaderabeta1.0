@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where } from 'firebase/firestore';
 
 const LiveGameViewer: React.FC<{ matchId: string, onClose: () => void }> = ({ matchId, onClose }) => {
     const [match, setMatch] = useState<any>(null);
-    const [stats, setStats] = useState<any[]>([]); // Stats acumuladas del juego
+    const [stats, setStats] = useState<any[]>([]); 
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<'pbp' | 'boxscore'>('pbp');
 
@@ -21,11 +21,9 @@ const LiveGameViewer: React.FC<{ matchId: string, onClose: () => void }> = ({ ma
 
     // 2. ESCUCHAR LAS ESTADÍSTICAS (BOX SCORE)
     useEffect(() => {
-        // Escuchamos la colección de stats filtrada por este partido
         const q = query(collection(db, 'stats_partido'), where('partidoId', '==', matchId));
         const unsubStats = onSnapshot(q, (snapshot) => {
             const statsData = snapshot.docs.map(d => d.data());
-            // Ordenar por puntos descendente
             statsData.sort((a, b) => b.puntos - a.puntos);
             setStats(statsData);
         });
@@ -38,7 +36,6 @@ const LiveGameViewer: React.FC<{ matchId: string, onClose: () => void }> = ({ ma
     const statsLocal = stats.filter(s => s.equipo === match.equipoLocalNombre);
     const statsVisitante = stats.filter(s => s.equipo === match.equipoVisitanteNombre);
 
-    // Renderizador de Tablas de Stats
     const StatsTable = ({ teamName, players }: { teamName: string, players: any[] }) => (
         <div style={{marginBottom:'20px'}}>
             <h4 style={{color:'#fbbf24', borderBottom:'1px solid #333', paddingBottom:'5px', margin:'0 0 10px 0'}}>{teamName}</h4>
@@ -118,10 +115,7 @@ const LiveGameViewer: React.FC<{ matchId: string, onClose: () => void }> = ({ ma
                 </button>
             </div>
 
-            {/* CONTENIDO SCROLLABLE */}
             <div style={{flex:1, overflowY:'auto', padding:'15px', background:'#000'}}>
-                
-                {/* VISTA PLAY BY PLAY */}
                 {activeTab === 'pbp' && (
                     <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
                         {match.gameLog?.map((log: any) => (
@@ -143,7 +137,6 @@ const LiveGameViewer: React.FC<{ matchId: string, onClose: () => void }> = ({ ma
                     </div>
                 )}
 
-                {/* VISTA BOX SCORE */}
                 {activeTab === 'boxscore' && (
                     <div>
                         <StatsTable teamName={match.equipoLocalNombre} players={statsLocal} />
@@ -152,7 +145,6 @@ const LiveGameViewer: React.FC<{ matchId: string, onClose: () => void }> = ({ ma
                 )}
             </div>
 
-            {/* FOOTER */}
             <div style={{padding:'10px', background:'#111', borderTop:'1px solid #333', textAlign:'center'}}>
                 <button onClick={onClose} className="btn btn-secondary" style={{width:'100%', maxWidth:'300px'}}>Cerrar Transmisión</button>
             </div>
