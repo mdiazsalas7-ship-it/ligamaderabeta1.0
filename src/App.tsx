@@ -33,7 +33,7 @@ interface Equipo {
     derrotas: number; 
     puntos_favor: number; 
     puntos_contra?: number; 
-    puntos: number; // Obligatorio (number)
+    puntos: number;
     logoUrl?: string; 
 }
 
@@ -46,6 +46,9 @@ function App() {
   const [formas21, setFormas21] = useState<Forma21[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   
+  // ESTADO PARA PARTIDOS EN VIVO (GLOBAL)
+  const [liveMatches, setLiveMatches] = useState<any[]>([]);
+
   // Vistas (Toggle states)
   const [viewRosterId, setViewRosterId] = useState<string | null>(null); 
   const [matchView, setMatchView] = useState(false); 
@@ -90,7 +93,18 @@ function App() {
     return () => unsubAuth();
   }, []);
 
-  // 2. Carga de Datos (Equipos, Formas)
+  // 2. DETECTOR DE JUEGOS EN VIVO (Esto hace que aparezca el botón rojo automáticamente)
+  useEffect(() => {
+      // Escucha CONSTANTE de partidos con estatus 'vivo'
+      const q = query(collection(db, 'calendario'), where('estatus', '==', 'vivo'));
+      const unsub = onSnapshot(q, (snap) => {
+          const lives = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          setLiveMatches(lives);
+      });
+      return () => unsub();
+  }, []);
+
+  // 3. Carga de Datos General
   useEffect(() => {
     if (!user || user.rol === 'pendiente') return;
     const loadData = async () => {
@@ -101,7 +115,6 @@ function App() {
                 return { 
                     id: d.id, 
                     ...data,
-                    // Conversión forzada a número para evitar errores de tipo
                     puntos: Number(data.puntos || 0)
                 } as Equipo;
             }));
@@ -171,14 +184,11 @@ function App() {
       
       <main className="main-content" style={{padding: '20px', maxWidth: '1200px', margin: '0 auto'}}>
         
-        {/* RENDERIZADO DE VISTAS */}
+        {/* VISTAS MODALES */}
         {newsFeedView && <NewsFeed onClose={() => setNewsFeedView(false)} />}
         {liveMatchId && <LiveGameViewer matchId={liveMatchId} onClose={() => setLiveMatchId(null)} />}
         {detailMatchId && <MatchDetailViewer matchId={detailMatchId} onClose={() => setDetailMatchId(null)} rol={user.rol} />}
-        
-        {/* AQUÍ ESTABA EL ERROR 1: Eliminamos 'userEquipoId' de CalendarViewer */}
         {calendarView && <CalendarViewer rol={user.rol} onClose={() => setCalendarView(false)} onViewLive={(id) => { setCalendarView(false); setLiveMatchId(id); }} onViewDetail={(id) => { setCalendarView(false); setDetailMatchId(id); }} />}
-        
         {statsView && <StatsViewer onClose={() => setStatsView(false)} />}
         {standingsView && <StandingsViewer equipos={equipos} onClose={() => setStandingsView(false)} />}
         {newsAdminView && <NewsAdmin onClose={() => setNewsAdminView(false)} />}
@@ -194,11 +204,58 @@ function App() {
         {/* DASHBOARD PRINCIPAL */}
         {isDashboard && (
             <div className="animate-fade-in">
-                <div style={{background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', borderRadius: '16px', padding: '30px', color: 'white', marginBottom: '40px', boxShadow: '0 10px 25px -5px rgba(59, 130, 246, 0.5)'}}>
+                
+                {/* HERO BIENVENIDA */}
+                <div style={{
+                    background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)',
+                    borderRadius: '16px', padding: '30px', color: 'white', marginBottom: '30px',
+                    boxShadow: '0 10px 25px -5px rgba(59, 130, 246, 0.5)'
+                }}>
                     <h2 style={{margin: '0 0 10px 0', fontSize: '1.8rem'}}>Hola, {user.email?.split('@')[0]} 👋</h2>
-                    <p style={{margin: 0, opacity: 0.9}}>Bienvenido al panel de control de la Liga Madera 15.</p>
+                    <p style={{margin: 0, opacity: 0.9}}>Bienvenido al panel de control.</p>
                 </div>
 
+                {/* 🔥 ZONA DE PARTIDOS EN VIVO (GAMECAST) - VISIBLE PARA TODOS 🔥 */}
+                {liveMatches.length > 0 && (
+                    <div style={{marginBottom:'30px'}}>
+                        <h3 style={{color:'#ef4444', marginBottom:'15px', display:'flex', alignItems:'center', gap:'10px', animation:'pulse 2s infinite'}}>
+                            🔴 EN VIVO AHORA
+                        </h3>
+                        <div style={{display:'grid', gap:'15px'}}>
+                            {liveMatches.map((m: any) => (
+                                <div key={m.id} onClick={() => setLiveMatchId(m.id)} style={{
+                                    background: 'linear-gradient(135deg, #111 0%, #222 100%)',
+                                    borderRadius: '12px', padding: '20px', cursor: 'pointer',
+                                    border: '2px solid #ef4444', boxShadow: '0 0 15px rgba(239, 68, 68, 0.4)',
+                                    color: 'white', display:'flex', flexDirection:'column', alignItems:'center'
+                                }}>
+                                    <div style={{fontSize:'0.9rem', color:'#fbbf24', fontWeight:'bold', marginBottom:'10px'}}>
+                                        {m.cancha ? `📍 ${m.cancha}` : '🔥 PARTIDO EN CURSO'}
+                                    </div>
+                                    <div style={{display:'flex', justifyContent:'space-between', width:'100%', alignItems:'center', marginBottom:'15px'}}>
+                                        <div style={{textAlign:'center', flex:1}}>
+                                            <div style={{fontWeight:'bold', fontSize:'1.2rem'}}>{m.equipoLocalNombre}</div>
+                                            <div style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorLocal}</div>
+                                        </div>
+                                        <div style={{fontWeight:'bold', color:'#666', fontSize:'1.2rem'}}>VS</div>
+                                        <div style={{textAlign:'center', flex:1}}>
+                                            <div style={{fontWeight:'bold', fontSize:'1.2rem'}}>{m.equipoVisitanteNombre}</div>
+                                            <div style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorVisitante}</div>
+                                        </div>
+                                    </div>
+                                    <button className="btn" style={{
+                                        background:'#ef4444', color:'white', width:'100%', fontWeight:'bold', 
+                                        padding:'12px', borderRadius:'8px', textTransform:'uppercase'
+                                    }}>
+                                        📺 Ver Transmisión Play-by-Play
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* ZONA DE TORNEO (MENÚ) */}
                 <h3 style={{fontSize: '1.1rem', color: '#6b7280', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>Zona de Torneo</h3>
                 <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '20px', marginBottom: '40px'}}>
                     <DashboardCard title="Noticias" icon="📢" color="#ef4444" onClick={()=>setNewsFeedView(true)} />
@@ -207,6 +264,7 @@ function App() {
                     <DashboardCard title="Líderes" icon="📊" color="#10b981" onClick={()=>setStatsView(true)} />
                 </div>
 
+                {/* MENÚS ESPECÍFICOS POR ROL */}
                 {user.rol === 'delegado' && (
                     <div style={{marginBottom: '40px'}}>
                         <h3 style={{fontSize: '1.1rem', color: '#6b7280', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>Mi Equipo</h3>
