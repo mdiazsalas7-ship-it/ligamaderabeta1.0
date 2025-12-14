@@ -179,18 +179,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         if (!selectedMatchId) fetchMatches();
     }, [selectedMatchId]);
 
-    // 2. ACTIVAR MODO 'VIVO' AL ENTRAR AL PARTIDO (¡LA SOLUCIÓN!)
-    useEffect(() => {
-        if (selectedMatchId && matchData) {
-            // Si el estatus es 'programado', lo pasamos a 'vivo' automáticamente
-            // para que los fans puedan verlo en su dashboard.
-            if (matchData.estatus === 'programado') {
-                updateDoc(doc(db, 'calendario', selectedMatchId), { estatus: 'vivo' });
-            }
-        }
-    }, [selectedMatchId, matchData?.estatus]); // Dependencia clave
-
-    // 3. RELOJ
+    // 2. RELOJ (LÓGICA INTERNA)
     useEffect(() => {
         if (isRunning && timeLeft > 0) {
             timerRef.current = setInterval(() => {
@@ -208,6 +197,18 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         } else { clearInterval(timerRef.current); }
         return () => clearInterval(timerRef.current);
     }, [isRunning]);
+
+    // --- NUEVO: FUNCIÓN PARA INICIAR/PAUSAR RELOJ ---
+    // Esta función activa el estatus 'vivo' SOLO al iniciar el reloj
+    const handleToggleClock = useCallback(() => {
+        const willStart = !isRunning;
+        setIsRunning(willStart);
+
+        // Si vamos a iniciar y el juego está "programado", lo pasamos a "vivo"
+        if (willStart && matchData && matchData.estatus === 'programado') {
+            updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo' });
+        }
+    }, [isRunning, matchData]);
 
     const adjustTime = useCallback((type: 'min'|'sec', amount: number) => {
         setTimeLeft(prev => {
@@ -438,30 +439,54 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         addLog(`🕒 Inicio del Periodo ${nextQ}`, 'period', 'system');
     };
 
-    useEffect(() => {
-        if (matchData && matchData.cuarto === 1) {
-            const updates: any = {};
-            let needsUpdate = false;
-            if (matchData.timeoutsLocal === undefined) { updates.timeoutsLocal = 2; needsUpdate = true; }
-            if (matchData.timeoutsVisitante === undefined) { updates.timeoutsVisitante = 2; needsUpdate = true; }
-            if (needsUpdate) updateDoc(doc(db, 'calendario', matchData.id), updates);
-        }
-    }, [matchData]);
-
     const handleFinalize = async () => {
-        if (!matchData || !window.confirm("¿FINALIZAR PARTIDO?")) return;
-        await updateDoc(doc(db, 'calendario', matchData.id), { 
-            estatus: 'finalizado', marcadorLocal: matchData.marcadorLocal, marcadorVisitante: matchData.marcadorVisitante 
-        });
-        onMatchFinalized();
-        onClose();
+        if (!matchData || !window.confirm("¿FINALIZAR PARTIDO Y ACTUALIZAR TABLA?")) return;
+        
+        try {
+            const localWins = matchData.marcadorLocal > matchData.marcadorVisitante;
+            const winnerId = localWins ? matchData.equipoLocalId : matchData.equipoVisitanteId;
+            const loserId = localWins ? matchData.equipoVisitanteId : matchData.equipoLocalId;
+            const winnerScore = localWins ? matchData.marcadorLocal : matchData.marcadorVisitante;
+            const loserScore = localWins ? matchData.marcadorVisitante : matchData.marcadorLocal;
+
+            await updateDoc(doc(db, 'equipos', winnerId), {
+                victorias: increment(1),
+                puntos: increment(2), // 2 puntos por ganar
+                puntos_favor: increment(winnerScore),
+                puntos_contra: increment(loserScore)
+            });
+
+            await updateDoc(doc(db, 'equipos', loserId), {
+                derrotas: increment(1),
+                puntos: increment(1), // 1 punto por perder
+                puntos_favor: increment(loserScore),
+                puntos_contra: increment(winnerScore)
+            });
+
+            await updateDoc(doc(db, 'calendario', matchData.id), { 
+                estatus: 'finalizado', 
+                marcadorLocal: matchData.marcadorLocal, 
+                marcadorVisitante: matchData.marcadorVisitante 
+            });
+
+            onMatchFinalized();
+            onClose();
+            alert("✅ Tabla actualizada.");
+
+        } catch (error) {
+            console.error("Error al actualizar tabla:", error);
+            alert("⚠️ Error al actualizar la tabla.");
+        }
     };
 
     const handleResetGame = async () => {
-        if (!matchData || !window.confirm("⚠️ ¿REINICIAR ESTE JUEGO A CERO? ⚠️\nSe borrará marcador, faltas y tiempo.")) return;
+        if (!matchData || !window.confirm("⚠️ ¿REINICIAR JUEGO A CERO?\nEl partido dejará de estar 'En Vivo'.")) return;
+        
         setIsRunning(false);
         setTimeLeft(6000);
         timeLeftRef.current = 6000;
+        
+        // REINICIA ESTATUS A PROGRAMADO (Desaparece de "En Vivo")
         await updateDoc(doc(db, 'calendario', matchData.id), {
             marcadorLocal: 0, marcadorVisitante: 0,
             faltasLocal: 0, faltasVisitante: 0,
@@ -469,7 +494,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             cuarto: 1, gameLog: [],
             estatus: 'programado' 
         });
-        alert("Juego reiniciado.");
+        alert("Juego reiniciado y ocultado de 'En Vivo'.");
     };
 
     if (!selectedMatchId) return (
@@ -518,12 +543,12 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     </button>
                 </div>
 
-                {/* RELOJ */}
+                {/* RELOJ CON HANDLER MODIFICADO */}
                 <ClockDisplay 
                     timeLeft={timeLeft} 
                     isRunning={isRunning} 
                     periodo={matchData.cuarto}
-                    onToggle={() => setIsRunning(!isRunning)} 
+                    onToggle={handleToggleClock} // USAMOS LA NUEVA FUNCIÓN
                     onNextQuarter={handleNextQuarter}
                     onAdjust={adjustTime}
                 />

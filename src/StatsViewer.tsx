@@ -7,22 +7,26 @@ interface PlayerStat {
     jugadorId: string;
     nombre: string;
     equipo: string;
-    puntos: number;
-    rebotes: number;
-    asistencias: number;
-    robos: number;
-    bloqueos: number;
-    faltas: number;
-    triples: number;
+    // Totales (para cálculo)
+    totalPuntos: number;
+    totalRebotes: number;
+    totalAsistencias: number;
+    totalTriples: number;
+    totalValoracion: number;
     partidosJugados: number;
-    valoracion: number; // Nueva métrica para MVP
+    // Promedios (para mostrar)
+    ppg: number; // Puntos por juego
+    rpg: number; // Rebotes por juego
+    apg: number; // Asistencias por juego
+    tpg: number; // Triples por juego
+    valpg: number; // Valoración por juego
     logoUrl?: string;
 }
 
 const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const [leaders, setLeaders] = useState<{
         mvp: PlayerStat[],
-        puntos: PlayerStat[], // RESTAURADO
+        puntos: PlayerStat[],
         rebotes: PlayerStat[],
         asistencias: PlayerStat[],
         triples: PlayerStat[]
@@ -43,12 +47,12 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                     }
                 });
 
-                // 2. Obtener Stats
+                // 2. Obtener Stats Raw
                 const statsSnap = await getDocs(collection(db, 'stats_partido'));
                 const rawStats: any[] = statsSnap.docs.map(d => d.data());
 
-                // 3. Agrupar
-                const aggregated: Record<string, PlayerStat> = {};
+                // 3. Agrupar y Sumar
+                const aggregated: Record<string, any> = {};
 
                 rawStats.forEach(stat => {
                     if (!aggregated[stat.jugadorId]) {
@@ -57,41 +61,48 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                             jugadorId: stat.jugadorId,
                             nombre: stat.nombre,
                             equipo: stat.equipo,
-                            puntos: 0, rebotes: 0, asistencias: 0, robos: 0, bloqueos: 0, faltas: 0, triples: 0,
+                            totalPuntos: 0, totalRebotes: 0, totalAsistencias: 0, totalRobos: 0, 
+                            totalBloqueos: 0, totalFaltas: 0, totalTriples: 0,
                             partidosJugados: 0,
-                            valoracion: 0,
-                            logoUrl: undefined
+                            logoUrl: teamLogos[stat.equipo] || undefined
                         };
                     }
                     const acc = aggregated[stat.jugadorId];
-                    acc.puntos += (stat.puntos || 0);
-                    acc.rebotes += (stat.rebotes || 0);
-                    acc.asistencias += (stat.asistencias || 0);
-                    acc.robos += (stat.robos || 0);
-                    acc.bloqueos += (stat.bloqueos || 0);
-                    acc.faltas += (stat.faltas || 0);
-                    acc.triples += (stat.triples || 0);
+                    acc.totalPuntos += (stat.puntos || 0);
+                    acc.totalRebotes += (stat.rebotes || 0);
+                    acc.totalAsistencias += (stat.asistencias || 0);
+                    acc.totalRobos += (stat.robos || 0);
+                    acc.totalBloqueos += (stat.bloqueos || 0);
+                    acc.totalFaltas += (stat.faltas || 0);
+                    acc.totalTriples += (stat.triples || 0);
                     acc.partidosJugados += 1;
-                    acc.logoUrl = teamLogos[stat.equipo] || undefined;
                 });
 
-                // Calcular Valoración (MVP Score) para cada jugador
-                // Fórmula simple: (PTS + REB + AST + ROB + BLK) - FAL
-                Object.values(aggregated).forEach(p => {
-                    p.valoracion = (p.puntos + p.rebotes + p.asistencias + p.robos + p.bloqueos) - p.faltas;
+                // 4. Calcular Promedios
+                const processedPlayers: PlayerStat[] = Object.values(aggregated).map((p: any) => {
+                    const games = p.partidosJugados || 1; // Evitar división por cero
+                    
+                    // Valoración Total Simple
+                    const valoracionTotal = (p.totalPuntos + p.totalRebotes + p.totalAsistencias + p.totalRobos + p.totalBloqueos) - p.totalFaltas;
+
+                    return {
+                        ...p,
+                        totalValoracion: valoracionTotal,
+                        ppg: parseFloat((p.totalPuntos / games).toFixed(1)),
+                        rpg: parseFloat((p.totalRebotes / games).toFixed(1)),
+                        apg: parseFloat((p.totalAsistencias / games).toFixed(1)),
+                        tpg: parseFloat((p.totalTriples / games).toFixed(1)),
+                        valpg: parseFloat((valoracionTotal / games).toFixed(1))
+                    };
                 });
 
-                const allPlayers = Object.values(aggregated);
-
-                // 4. Ordenar Categorías
+                // 5. Ordenar por PROMEDIOS
                 setLeaders({
-                    // MVP: Ordenado por VALORACIÓN (Eficiencia)
-                    mvp: [...allPlayers].sort((a,b) => b.valoracion - a.valoracion).slice(0, 10),
-                    // PUNTOS: Ordenado por PUNTOS Puros (Restaurado)
-                    puntos: [...allPlayers].sort((a,b) => b.puntos - a.puntos).slice(0, 10),
-                    rebotes: [...allPlayers].sort((a,b) => b.rebotes - a.rebotes).slice(0, 10),
-                    asistencias: [...allPlayers].sort((a,b) => b.asistencias - a.asistencias).slice(0, 10),
-                    triples: [...allPlayers].sort((a,b) => b.triples - a.triples).slice(0, 10),
+                    mvp: [...processedPlayers].sort((a,b) => b.valpg - a.valpg).slice(0, 10),
+                    puntos: [...processedPlayers].sort((a,b) => b.ppg - a.ppg).slice(0, 10),
+                    rebotes: [...processedPlayers].sort((a,b) => b.rpg - a.rpg).slice(0, 10),
+                    asistencias: [...processedPlayers].sort((a,b) => b.apg - a.apg).slice(0, 10),
+                    triples: [...processedPlayers].sort((a,b) => b.tpg - a.tpg).slice(0, 10),
                 });
 
             } catch (error) {
@@ -103,7 +114,7 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         fetchStats();
     }, []);
 
-    const LeaderCard = ({ title, data, icon, color }: any) => (
+    const LeaderCard = ({ title, data, icon, color, label }: any) => (
         <div style={{background:'white', borderRadius:'12px', padding:'20px', boxShadow:'0 4px 6px rgba(0,0,0,0.05)', borderTop:`4px solid ${color}`}}>
             <div style={{display:'flex', alignItems:'center', gap:'10px', marginBottom:'15px'}}>
                 <span style={{fontSize:'1.5rem'}}>{icon}</span>
@@ -120,15 +131,19 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                             }
                             <div>
                                 <div style={{fontWeight:'bold', fontSize:'0.9rem', color:'#1f2937'}}>{p.nombre}</div>
-                                <div style={{fontSize:'0.75rem', color:'#6b7280'}}>{p.equipo}</div>
+                                <div style={{fontSize:'0.75rem', color:'#6b7280'}}>
+                                    {p.equipo} • <span style={{fontSize:'0.7rem'}}>({p.partidosJugados} JJ)</span>
+                                </div>
                             </div>
                         </div>
-                        <div style={{fontWeight:'900', fontSize:'1.1rem', color:color}}>
-                            {/* Mostrar el dato relevante según la tabla */}
-                            {title.includes('MVP') ? p.valoracion : 
-                             title.includes('Puntos') ? p.puntos : 
-                             title.includes('Rebotes') ? p.rebotes : 
-                             title.includes('Asistencias') ? p.asistencias : p.triples}
+                        <div style={{textAlign:'right'}}>
+                            <div style={{fontWeight:'900', fontSize:'1.2rem', color:color}}>
+                                {title.includes('MVP') ? p.valpg : 
+                                 title.includes('Puntos') ? p.ppg : 
+                                 title.includes('Rebotes') ? p.rpg : 
+                                 title.includes('Asistencias') ? p.apg : p.tpg}
+                            </div>
+                            <div style={{fontSize:'0.6rem', color:'#999', fontWeight:'bold'}}>{label}</div>
                         </div>
                     </div>
                 ))}
@@ -143,23 +158,17 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             display:'flex', flexDirection:'column', overflow:'hidden'
         }}>
             <div style={{padding:'15px 20px', background:'white', borderBottom:'1px solid #eee', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                <h2 style={{color:'var(--primary)', margin:0, fontSize:'1.2rem'}}>📊 Líderes de la Liga</h2>
+                <h2 style={{color:'var(--primary)', margin:0, fontSize:'1.2rem'}}>📊 Estadísticas (Promedios)</h2>
                 <button onClick={onClose} className="btn btn-secondary">Cerrar</button>
             </div>
 
             <div style={{flex:1, overflowY:'auto', padding:'20px'}}>
                 <div style={{maxWidth:'1000px', margin:'0 auto', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(300px, 1fr))', gap:'20px'}}>
-                    
-                    {/* 1. MVP (Eficiencia) */}
-                    <LeaderCard title="🏆 Carrera MVP (Valoración)" data={leaders.mvp} icon="👑" color="#eab308" />
-                    
-                    {/* 2. PUNTOS (Restaurado) */}
-                    <LeaderCard title="🔥 Líderes en Puntos" data={leaders.puntos} icon="🏀" color="#ef4444" />
-                    
-                    {/* 3. OTRAS CATEGORÍAS */}
-                    <LeaderCard title="🖐️ Rebotes" data={leaders.rebotes} icon="🛡️" color="#10b981" />
-                    <LeaderCard title="🅰️ Asistencias" data={leaders.asistencias} icon="👟" color="#3b82f6" />
-                    <LeaderCard title="🎯 Triples" data={leaders.triples} icon="👌" color="#8b5cf6" />
+                    <LeaderCard title="🏆 Carrera MVP" data={leaders.mvp} icon="👑" color="#eab308" label="VAL/J" />
+                    <LeaderCard title="🔥 Puntos" data={leaders.puntos} icon="🏀" color="#ef4444" label="PPP" />
+                    <LeaderCard title="🖐️ Rebotes" data={leaders.rebotes} icon="🛡️" color="#10b981" label="RPP" />
+                    <LeaderCard title="🅰️ Asistencias" data={leaders.asistencias} icon="👟" color="#3b82f6" label="APP" />
+                    <LeaderCard title="🎯 Triples" data={leaders.triples} icon="👌" color="#8b5cf6" label="TPP" />
                 </div>
             </div>
         </div>
