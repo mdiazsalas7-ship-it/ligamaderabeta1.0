@@ -15,7 +15,6 @@ interface PlayerStat {
     triples: number;
 }
 
-// AHORA RECIBIMOS EL "ROL" COMO PROPIEDAD
 const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: string }> = ({ matchId, onClose, rol }) => {
     const [match, setMatch] = useState<any>(null);
     const [statsA, setStatsA] = useState<PlayerStat[]>([]);
@@ -34,11 +33,22 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                     const data = matchSnap.data();
                     setMatch({ id: matchSnap.id, ...data });
 
-                    const idA = data.equipoLocalId || Object.keys(data.forma5 || {})[0];
-                    const idB = data.equipoVisitanteId || Object.keys(data.forma5 || {})[1];
-                    const rosterA = data.forma5?.[idA] || [];
-                    const rosterB = data.forma5?.[idB] || [];
+                    const idA = data.equipoLocalId;
+                    const idB = data.equipoVisitanteId;
 
+                    // --- FUNCIÓN DE EXTRACCIÓN SEGURA (PROTEGE CONTRA CRASHES) ---
+                    const getRoster = (teamId: string) => {
+                        if (!data.forma5 || !teamId) return [];
+                        const raw = data.forma5[teamId];
+                        if (Array.isArray(raw)) return raw; // Formato viejo
+                        if (raw?.jugadores) return raw.jugadores; // Formato nuevo
+                        return []; // Si no hay nada, array vacío
+                    };
+
+                    const rosterA = getRoster(idA);
+                    const rosterB = getRoster(idB);
+
+                    // Cargar Stats
                     const statsQuery = query(collection(db, 'stats_partido'), where('partidoId', '==', matchId));
                     const statsSnap = await getDocs(statsQuery);
                     const statsMap: Record<string, any> = {};
@@ -46,7 +56,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
 
                     const mapToStat = (player: any) => {
                         const saved = statsMap[player.id] || {};
-                        const faltasTotales = (saved.faltasPersonales || 0) + (saved.faltasTecnicas || 0) + (saved.faltasAntideportivas || 0);
+                        const faltasTotales = (saved.faltasPersonales || 0) + (saved.faltasTecnicas || 0) + (saved.faltasAntideportivas || 0) + (saved.faltasDescalificantes || 0);
                         const faltasFinal = saved.faltas || faltasTotales || 0;
                         return {
                             playerId: player.id,
@@ -71,7 +81,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
     }, [matchId]);
 
     const handleChange = (team: 'A'|'B', index: number, field: keyof PlayerStat, value: string) => {
-        if (rol !== 'admin') return; // SEGURIDAD: Solo admin puede editar
+        if (rol !== 'admin') return; 
 
         const val = value === '' ? 0 : parseInt(value);
         if (team === 'A') {
@@ -86,7 +96,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
     };
 
     const handleSave = async () => {
-        if (rol !== 'admin') return; // SEGURIDAD
+        if (rol !== 'admin') return; 
 
         setSaving(true);
         try {
@@ -108,7 +118,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
         } catch (e) { console.error(e); alert("Error al guardar."); } finally { setSaving(false); }
     };
 
-    // CÁLCULO DEL MVP DEL PARTIDO (Solo local)
+    // MVP CALCULATION
     const getValuation = (s: PlayerStat) => s.puntos + s.rebotes + s.asistencias + s.robos + s.bloqueos;
     const gameMVP = [...statsA, ...statsB].sort((a,b) => getValuation(b) - getValuation(a))[0];
 
@@ -134,7 +144,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                     <button onClick={onClose} className="btn" style={{background:'rgba(255,255,255,0.2)', color:'white', border:'none'}}>Cerrar</button>
                 </div>
 
-                {/* TARJETA MVP DEL JUEGO */}
+                {/* MVP CARD */}
                 {gameMVP && getValuation(gameMVP) > 0 && (
                     <div style={{
                         background: 'linear-gradient(to right, #0f172a, #334155)', color:'white', padding:'15px 20px',
@@ -160,7 +170,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                     </div>
                 )}
 
-                {/* TABS EQUIPOS */}
+                {/* TABS */}
                 <div style={{display:'flex', borderBottom:'1px solid #ddd'}}>
                     <button onClick={()=>setActiveTab('A')} style={{flex:1, padding:'15px', border:'none', background: activeTab==='A' ? 'white' : '#f5f5f5', fontWeight:'bold', borderBottom: activeTab==='A' ? '3px solid var(--primary)' : 'none', cursor:'pointer', color:'#333'}}>
                         🏠 {match?.equipoLocalNombre}
@@ -170,7 +180,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                     </button>
                 </div>
 
-                {/* TABLA DE ESTADÍSTICAS */}
+                {/* TABLA */}
                 <div style={{flex: 1, overflowY: 'auto', padding: '20px'}}>
                     <table style={{width: '100%', borderCollapse: 'collapse'}}>
                         <thead>
@@ -186,39 +196,41 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                             </tr>
                         </thead>
                         <tbody>
-                            {(activeTab === 'A' ? statsA : statsB).map((stat, idx) => (
-                                <tr key={stat.playerId} style={{borderBottom: '1px solid #eee'}}>
-                                    <td style={{padding: '10px', fontWeight: 'bold', color: '#888'}}>{stat.numero}</td>
-                                    <td style={{padding: '10px', fontWeight: '600', fontSize:'0.9rem'}}>{stat.nombre}</td>
-                                    
-                                    {['puntos', 'rebotes', 'asistencias', 'robos', 'bloqueos', 'faltas'].map((field) => (
-                                        <td key={field} style={{padding: '5px'}}>
-                                            <input 
-                                                type="number" 
-                                                value={(stat as any)[field]} 
-                                                // 🔒 BLOQUEO: Si no es admin, readOnly es true
-                                                readOnly={rol !== 'admin'}
-                                                onChange={(e) => handleChange(activeTab, idx, field as any, e.target.value)}
-                                                style={{
-                                                    width: '100%', padding: '6px', textAlign: 'center', 
-                                                    borderRadius: '4px', 
-                                                    border: rol === 'admin' ? '1px solid #ddd' : 'none',
-                                                    // Estilo visual de "Solo lectura" si no es admin
-                                                    backgroundColor: rol !== 'admin' ? 'transparent' : ((stat as any)[field] > 0 ? (field==='puntos'?'#eff6ff':'#f9fafb') : 'white'),
-                                                    fontWeight: field === 'puntos' ? 'bold' : 'normal',
-                                                    color: field === 'puntos' ? 'var(--primary)' : '#444'
-                                                }}
-                                                min="0"
-                                            />
-                                        </td>
-                                    ))}
-                                </tr>
-                            ))}
+                            {(activeTab === 'A' ? statsA : statsB).length === 0 ? (
+                                <tr><td colSpan={8} style={{textAlign:'center', padding:'20px', color:'#999'}}>No hay datos disponibles.</td></tr>
+                            ) : (
+                                (activeTab === 'A' ? statsA : statsB).map((stat, idx) => (
+                                    <tr key={stat.playerId} style={{borderBottom: '1px solid #eee'}}>
+                                        <td style={{padding: '10px', fontWeight: 'bold', color: '#888'}}>{stat.numero}</td>
+                                        <td style={{padding: '10px', fontWeight: '600', fontSize:'0.9rem'}}>{stat.nombre}</td>
+                                        
+                                        {['puntos', 'rebotes', 'asistencias', 'robos', 'bloqueos', 'faltas'].map((field) => (
+                                            <td key={field} style={{padding: '5px'}}>
+                                                <input 
+                                                    type="number" 
+                                                    value={(stat as any)[field]} 
+                                                    readOnly={rol !== 'admin'}
+                                                    onChange={(e) => handleChange(activeTab, idx, field as any, e.target.value)}
+                                                    style={{
+                                                        width: '100%', padding: '6px', textAlign: 'center', 
+                                                        borderRadius: '4px', 
+                                                        border: rol === 'admin' ? '1px solid #ddd' : 'none',
+                                                        backgroundColor: rol !== 'admin' ? 'transparent' : ((stat as any)[field] > 0 ? (field==='puntos'?'#eff6ff':'#f9fafb') : 'white'),
+                                                        fontWeight: field === 'puntos' ? 'bold' : 'normal',
+                                                        color: field === 'puntos' ? 'var(--primary)' : '#444'
+                                                    }}
+                                                    min="0"
+                                                />
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))
+                            )}
                         </tbody>
                     </table>
                 </div>
 
-                {/* FOOTER (Solo visible para Admin) */}
+                {/* FOOTER */}
                 {rol === 'admin' ? (
                     <div style={{padding: '20px', borderTop: '1px solid #eee', textAlign: 'right', background:'#f9fafb', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
                          <div style={{fontSize:'0.8rem', color:'#ef4444'}}>* Modo Edición Activo (Admin)</div>

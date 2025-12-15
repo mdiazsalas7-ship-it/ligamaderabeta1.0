@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
 import { db } from './firebase';
 import { doc, updateDoc, onSnapshot, collection, query, getDocs, setDoc, increment, deleteDoc, where } from 'firebase/firestore';
 
+// --- URL DEL SONIDO DE LA CHICHARRA ---
+const BUZZER_SOUND_URL = "https://www.myinstants.com/media/sounds/nba-buzzer.mp3";
+
 // --- INTERFACES ---
 interface Player { id: string; nombre: string; numero: number; equipoId: string; }
 interface Staff { entrenador: string; asistente: string; expulsado?: boolean; faltasTecnicas?: number; }
@@ -22,20 +25,22 @@ interface MatchData {
     equipoVisitanteId: string; equipoVisitanteNombre: string;
     marcadorLocal: number; marcadorVisitante: number;
     cuarto: number; estatus: string;
-    forma5?: any; // Flexible para soportar formato nuevo y viejo
+    forma5?: any;
     staffLocal?: Staff; staffVisitante?: Staff;
     faltasLocal: number; faltasVisitante: number;
     timeoutsLocal: number; timeoutsVisitante: number;
     gameLog?: GameEvent[];
 }
 
-// --- 1. RELOJ AISLADO ---
+// --- 1. RELOJ CENTRAL ---
 const ClockDisplay = memo(({ 
-    timeLeft, isRunning, periodo, onToggle, onNextQuarter, onAdjust 
+    timeLeft, shotClock, isRunning, periodo, onToggle, onNextQuarter, onAdjust, onResetShot 
 }: { 
-    timeLeft: number, isRunning: boolean, periodo: number,
-    onToggle: () => void, onNextQuarter: () => void, onAdjust: (type: 'min'|'sec', v: number) => void 
+    timeLeft: number, shotClock: number, isRunning: boolean, periodo: number,
+    onToggle: () => void, onNextQuarter: () => void, onAdjust: (type: 'min'|'sec', v: number) => void,
+    onResetShot: (val: 24 | 14) => void
 }) => {
+    
     const formatTime = (tenths: number) => {
         const totalSeconds = Math.floor(tenths / 10);
         const mins = Math.floor(totalSeconds / 60);
@@ -43,17 +48,52 @@ const ClockDisplay = memo(({
         const dec = tenths % 10;
         return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${dec}`;
     };
+
+    const formatShotClock = (tenths: number) => {
+        if (timeLeft < tenths) return ""; 
+        const secs = Math.ceil(tenths / 10);
+        return secs.toString();
+    };
+
     const getPeriodoLabel = (p: number) => p <= 4 ? `CUARTO ${p}` : `PRÓRROGA ${p - 4}`;
+    const isCrunchTime = periodo >= 4 && timeLeft <= 1200;
 
     return (
         <div style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center'}}>
-            <div style={{color:'#fbbf24', fontWeight:'bold', marginBottom:'5px', textShadow:'2px 2px 4px #000'}}>{getPeriodoLabel(periodo)}</div>
-            <div style={{
-                fontSize:'3rem', fontFamily:'monospace', fontWeight:'bold', 
-                color: isRunning ? '#10b981' : '#ef4444', lineHeight:1,
-                background:'rgba(17, 17, 17, 0.8)', padding:'5px 20px', borderRadius:'6px', border:'1px solid #333',
-                marginBottom:'5px', backdropFilter: 'blur(2px)', minWidth:'220px', textAlign:'center'
-            }}>{formatTime(timeLeft)}</div>
+            <div style={{color:'#fbbf24', fontWeight:'bold', marginBottom:'5px', textShadow:'2px 2px 4px #000'}}>
+                {getPeriodoLabel(periodo)}
+            </div>
+            
+            <div style={{display:'flex', alignItems:'center', gap:'15px', marginBottom:'10px'}}>
+                {/* RELOJ PRINCIPAL */}
+                <div style={{
+                    fontSize:'3rem', fontFamily:'monospace', fontWeight:'bold', 
+                    color: isRunning ? '#10b981' : (isCrunchTime ? '#ef4444' : '#ef4444'), lineHeight:1,
+                    background:'rgba(17, 17, 17, 0.8)', padding:'5px 20px', borderRadius:'6px', border: isCrunchTime ? '2px solid #ef4444' : '1px solid #333',
+                    minWidth:'220px', textAlign:'center'
+                }}>
+                    {formatTime(timeLeft)}
+                </div>
+
+                {/* RELOJ DE TIRO (24s) */}
+                <div style={{display:'flex', flexDirection:'column', alignItems:'center', background:'#222', padding:'5px', borderRadius:'6px', border:'1px solid #444'}}>
+                    <div style={{fontSize:'0.6rem', color:'#888', marginBottom:'2px'}}>POSESIÓN</div>
+                    <div style={{
+                        fontSize:'2rem', fontWeight:'bold', color: shotClock <= 50 ? 'red' : '#fbbf24', 
+                        fontFamily:'monospace', lineHeight:1, minWidth:'50px', textAlign:'center'
+                    }}>
+                        {formatShotClock(shotClock) || '-'}
+                    </div>
+                    {/* Botones Manuales */}
+                    <div style={{display:'flex', gap:'3px', marginTop:'5px'}}>
+                        <button onClick={() => onResetShot(24)} style={{background:'#2563eb', color:'white', border:'none', borderRadius:'3px', fontSize:'0.7rem', fontWeight:'bold', cursor:'pointer', padding:'2px 5px'}}>24</button>
+                        <button onClick={() => onResetShot(14)} style={{background:'#d97706', color:'white', border:'none', borderRadius:'3px', fontSize:'0.7rem', fontWeight:'bold', cursor:'pointer', padding:'2px 5px'}}>14</button>
+                    </div>
+                </div>
+            </div>
+
+            {isCrunchTime && <div style={{fontSize:'0.7rem', color:'#ef4444', fontWeight:'bold', marginBottom:'5px', animation:'pulse 1s infinite'}}>⚠️ FIBA: RELOJ SE DETIENE AL ANOTAR</div>}
+            
             <div style={{display:'flex', gap:'2px', marginBottom:'5px'}}>
                 <button className="clock-btn" onClick={()=>onAdjust('min', 1)}>+1m</button>
                 <button className="clock-btn" onClick={()=>onAdjust('min', -1)}>-1m</button>
@@ -70,7 +110,7 @@ const ClockDisplay = memo(({
     );
 });
 
-// --- 2. FILA DE JUGADOR (CON CAPITÁN) ---
+// --- 2. FILA DE JUGADOR ---
 const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCaptain }: any) => {
     const isExpulsado = stats?.expulsado;
     const faltas = stats?.faltasTotales || 0;
@@ -90,8 +130,7 @@ const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCap
                 <div style={{fontWeight:'bold', color:'white', display:'flex', alignItems:'center', gap:'5px', fontSize:'0.85rem'}}>
                     <span style={{background:'#444', padding:'1px 5px', borderRadius:'3px', color:'#fff', fontSize:'0.75rem'}}>#{player.numero}</span>
                     <span style={{whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'110px'}}>
-                        {player.nombre} 
-                        {isCaptain && <span title="Capitán" style={{color:'#f59e0b', marginLeft:'5px', fontSize:'0.8rem'}}>⭐</span>}
+                        {player.nombre} {isCaptain && <span title="Capitán" style={{color:'#f59e0b', marginLeft:'5px'}}>⭐</span>}
                     </span>
                 </div>
                 <div style={{display:'flex', gap:'2px'}}>
@@ -103,11 +142,17 @@ const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCap
             </div>
             {!isSubTarget && !isExpulsado && (
                 <div style={{display:'flex', gap:'2px', justifyContent:'space-between', marginTop:'2px'}}>
-                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 1)}} className="btn-stat">+1</button>
-                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 2)}} className="btn-stat">+2</button>
-                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 3)}} className="btn-stat">+3</button>
-                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'rebotes', 1)}} className="btn-stat" style={{background:'#059669', fontSize:'0.7rem'}}>R</button>
-                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'asistencias', 1)}} className="btn-stat" style={{background:'#7c3aed', fontSize:'0.7rem'}}>A</button>
+                    {/* PUNTOS (Resetean 24) */}
+                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 1)}} className="btn-stat" style={{background:'#1d4ed8'}}>+1</button>
+                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 2)}} className="btn-stat" style={{background:'#1d4ed8'}}>+2</button>
+                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 3)}} className="btn-stat" style={{background:'#1d4ed8'}}>+3</button>
+                    
+                    {/* REBOTES INTELIGENTES */}
+                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'rebote_def', 1)}} className="btn-stat" style={{background:'#059669', fontSize:'0.65rem'}} title="Rebote Defensivo (24s)">RD</button>
+                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'rebote_of', 1)}} className="btn-stat" style={{background:'#d97706', fontSize:'0.65rem'}} title="Rebote Ofensivo (14s)">RO</button>
+                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'asistencias', 1)}} className="btn-stat" style={{background:'#7c3aed', fontSize:'0.65rem'}}>A</button>
+                    
+                    {/* FALTAS (Chequean 14s) */}
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_P', 0)}} className="btn-stat" style={{background:'#dc2626', color:'white'}}>P</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_T', 0)}} className="btn-stat" style={{background:'#be123c', color:'white'}}>T</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_U', 0)}} className="btn-stat" style={{background:'#991b1b', color:'white'}}>U</button>
@@ -122,15 +167,17 @@ const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCap
 
 // --- 3. FILA DE STAFF ---
 const StaffRow = memo(({ staff, team, onAction }: any) => {
-    if (!staff || !staff.entrenador) return <div style={{padding:'5px', textAlign:'center', color:'#666', fontSize:'0.7rem'}}>Sin Cuerpo Técnico</div>;
-    const isExpulsado = staff.expulsado;
+    const entrenador = staff?.entrenador || 'Sin DT';
+    const asistente = staff?.asistente || '';
+    const isExpulsado = staff?.expulsado;
+
     return (
         <div style={{marginTop:'10px', padding:'6px', borderRadius:'4px', background: '#2d3748', border: '1px solid #4a5568', opacity: isExpulsado ? 0.6 : 1}}>
             <div style={{color:'#a0aec0', fontSize:'0.7rem', fontWeight:'bold', marginBottom:'2px'}}>CUERPO TÉCNICO</div>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
                 <div>
-                    <div style={{fontWeight:'bold', fontSize:'0.85rem', color:'white'}}>DT: {staff.entrenador}</div>
-                    {staff.asistente && <div style={{fontSize:'0.75rem', color:'#cbd5e0'}}>AT: {staff.asistente}</div>}
+                    <div style={{fontWeight:'bold', fontSize:'0.85rem', color:'white'}}>DT: {entrenador}</div>
+                    {asistente && <div style={{fontSize:'0.75rem', color:'#cbd5e0'}}>AT: {asistente}</div>}
                 </div>
                 {!isExpulsado ? (
                     <div style={{display:'flex', gap:'5px'}}>
@@ -147,53 +194,107 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const [matches, setMatches] = useState<any[]>([]);
     const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
     const [matchData, setMatchData] = useState<MatchData | null>(null);
-    
-    // Arrays de jugadores
     const [localOnCourt, setLocalOnCourt] = useState<Player[]>([]);
     const [localBench, setLocalBench] = useState<Player[]>([]);
     const [visitanteOnCourt, setVisitanteOnCourt] = useState<Player[]>([]);
     const [visitanteBench, setVisitanteBench] = useState<Player[]>([]);
-    
-    // Identificadores de Capitanes
     const [captains, setCaptains] = useState<{local: string|null, visitante: string|null}>({ local: null, visitante: null });
-
     const [statsCache, setStatsCache] = useState<Record<string, PlayerGameStats>>({});
-    const [staffCache, setStaffCache] = useState<{local: Staff, visitante: Staff}>({ 
-        local: {entrenador:'', asistente:''}, visitante: {entrenador:'', asistente:''} 
-    });
+    const [staffCache, setStaffCache] = useState<{local: Staff, visitante: Staff}>({ local: {entrenador:'', asistente:''}, visitante: {entrenador:'', asistente:''} });
 
     const [timeLeft, setTimeLeft] = useState(6000); 
+    const [shotClock, setShotClock] = useState(240); // 24.0s
+    
     const [isRunning, setIsRunning] = useState(false);
     const timeLeftRef = useRef(6000);
+    const shotClockRef = useRef(240); 
+    
     const timerRef = useRef<any>(null);
+    const buzzerRef = useRef<HTMLAudioElement | null>(null); // REF PARA EL AUDIO
+
     const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
     const [benchModalOpen, setBenchModalOpen] = useState<'local' | 'visitante' | null>(null);
+
+    // INICIALIZAR AUDIO (Solo una vez)
+    useEffect(() => {
+        buzzerRef.current = new Audio(BUZZER_SOUND_URL);
+        buzzerRef.current.volume = 1.0; // Volumen máximo
+    }, []);
+
+    // FUNCIÓN PARA REPRODUCIR SONIDO
+    const playBuzzer = () => {
+        if (buzzerRef.current) {
+            buzzerRef.current.currentTime = 0; // Rebobinar si ya se estaba reproduciendo
+            buzzerRef.current.play().catch((e) => console.log("Audio play blocked by browser policy until interaction.", e));
+        }
+    };
 
     // 1. CARGAR PARTIDOS
     useEffect(() => {
         const fetchMatches = async () => {
             const q = query(collection(db, 'calendario')); 
             const snap = await getDocs(q);
-            const pendingMatches = snap.docs.map(d => ({ id: d.id, ...d.data() } as any))
-                .filter(m => m.estatus === 'programado' || m.estatus === 'vivo')
-                .sort((a,b) => a.fechaAsignada.localeCompare(b.fechaAsignada));
-            setMatches(pendingMatches);
+            setMatches(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((m:any) => m.estatus === 'programado' || m.estatus === 'vivo'));
         };
         if (!selectedMatchId) fetchMatches();
     }, [selectedMatchId]);
 
-    // 2. RELOJ
+    // 2. RELOJ UNIFICADO
     useEffect(() => {
-        if (isRunning && timeLeft > 0) {
+        if (isRunning) {
             timerRef.current = setInterval(() => {
+                // A) Reloj Juego
                 setTimeLeft((prev) => {
-                    if (prev <= 1) { setIsRunning(false); timeLeftRef.current = 0; return 0; }
+                    if (prev <= 1) { 
+                        // FIN DEL PERIODO
+                        setIsRunning(false); 
+                        timeLeftRef.current = 0; 
+                        playBuzzer(); // 🔊 SONIDO
+                        return 0; 
+                    }
                     const newVal = prev - 1; timeLeftRef.current = newVal; return newVal;
                 });
+
+                // B) Reloj Tiro
+                if (timeLeftRef.current > shotClockRef.current) {
+                    setShotClock((prev) => {
+                        const nextVal = prev - 1;
+                        shotClockRef.current = nextVal;
+                        
+                        if (nextVal <= 0) {
+                            // VIOLACIÓN 24S
+                            setIsRunning(false); 
+                            playBuzzer(); // 🔊 SONIDO
+                            return 0; 
+                        }
+                        return nextVal;
+                    });
+                }
             }, 100);
         } else { clearInterval(timerRef.current); }
         return () => clearInterval(timerRef.current);
     }, [isRunning]);
+
+    // --- EFECTO PARA REGISTRAR VIOLACIÓN DE 24s ---
+    useEffect(() => {
+        if (shotClock === 0 && isRunning) {
+            setIsRunning(false);
+            addLog("🚨 VIOLACIÓN DE 24 SEGUNDOS", "system", "system");
+            playBuzzer();
+            alert("🔊 24 SEGUNDOS AGOTADOS");
+        }
+    }, [shotClock]);
+
+    // Regla FIBA: 3 TM -> 2 TM en 2 min finales 4Q
+    useEffect(() => {
+        if (!matchData) return;
+        if (matchData.cuarto === 4 && timeLeft <= 1200) {
+            const updates: any = {};
+            if (matchData.timeoutsLocal === 3) updates.timeoutsLocal = 2;
+            if (matchData.timeoutsVisitante === 3) updates.timeoutsVisitante = 2;
+            if (Object.keys(updates).length > 0) updateDoc(doc(db, 'calendario', matchData.id), updates);
+        }
+    }, [timeLeft, matchData]);
 
     const handleToggleClock = useCallback(() => {
         const willStart = !isRunning;
@@ -202,6 +303,11 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo' });
         }
     }, [isRunning, matchData]);
+
+    const handleResetShotClock = (val: 24 | 14) => {
+        const newVal = val * 10;
+        setShotClock(newVal); shotClockRef.current = newVal;
+    };
 
     const adjustTime = useCallback((type: 'min'|'sec', amount: number) => {
         setTimeLeft(prev => {
@@ -228,69 +334,45 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         return () => unsub();
     }, [selectedMatchId]);
 
-    // 5. INICIALIZAR ROSTERS, STAFF Y CAPITANES (LÓGICA CORREGIDA)
+    // Sincronizar Staff
+    useEffect(() => {
+        if (matchData) {
+            setStaffCache({
+                local: matchData.staffLocal || {entrenador:'', asistente:''},
+                visitante: matchData.staffVisitante || {entrenador:'', asistente:''}
+            });
+        }
+    }, [matchData]);
+
+    // 5. INICIALIZAR ROSTERS
     useEffect(() => {
         if (matchData) {
             if (localOnCourt.length === 0 && localBench.length === 0) {
-                
-                // Función para separar titulares y banca correctamente
                 const processTeam = (forma5Data: any) => {
                     if (!forma5Data) return { court: [], bench: [], captainId: null };
-                    
                     let allPlayers: Player[] = [];
                     let starters: string[] = [];
                     let captain: string | null = null;
-
-                    // Caso 1: Estructura Nueva (Objeto con jugadores y startersIds)
                     if (forma5Data.jugadores && Array.isArray(forma5Data.jugadores)) {
-                        allPlayers = forma5Data.jugadores;
-                        starters = forma5Data.startersIds || [];
-                        captain = forma5Data.captainId || null;
-                    } 
-                    // Caso 2: Estructura Vieja (Array directo)
-                    else if (Array.isArray(forma5Data)) {
-                        allPlayers = forma5Data;
-                        // Si es vieja, asumimos los primeros 5 como titulares
-                        starters = allPlayers.slice(0, 5).map(p => p.id);
+                        allPlayers = forma5Data.jugadores; starters = forma5Data.startersIds || []; captain = forma5Data.captainId || null;
+                    } else if (Array.isArray(forma5Data)) {
+                        allPlayers = forma5Data; starters = allPlayers.slice(0, 5).map(p => p.id);
                     }
-
-                    // Separar
                     const court = allPlayers.filter(p => starters.includes(p.id));
                     const bench = allPlayers.filter(p => !starters.includes(p.id));
-                    
-                    // Fallback de emergencia si no hay titulares definidos en la nueva estructura
-                    if (court.length === 0 && allPlayers.length > 0) {
-                        return { court: allPlayers.slice(0, 5), bench: allPlayers.slice(5), captainId: captain };
-                    }
-
+                    if (court.length === 0 && allPlayers.length > 0) return { court: allPlayers.slice(0, 5), bench: allPlayers.slice(5), captainId: captain };
                     return { court, bench, captainId: captain };
                 };
-
-                // Procesar Local
                 const localRes = processTeam(matchData.forma5?.[matchData.equipoLocalId]);
-                setLocalOnCourt(localRes.court);
-                setLocalBench(localRes.bench);
-
-                // Procesar Visitante
+                setLocalOnCourt(localRes.court); setLocalBench(localRes.bench);
                 const visitorRes = processTeam(matchData.forma5?.[matchData.equipoVisitanteId]);
-                setVisitanteOnCourt(visitorRes.court);
-                setVisitanteBench(visitorRes.bench);
-
-                // Guardar capitanes
+                setVisitanteOnCourt(visitorRes.court); setVisitanteBench(visitorRes.bench);
                 setCaptains({ local: localRes.captainId, visitante: visitorRes.captainId });
-
-                // Inicializar Stats Cache
                 const cache: Record<string, PlayerGameStats> = {};
                 [...localRes.court, ...localRes.bench, ...visitorRes.court, ...visitorRes.bench].forEach(p => {
                     cache[p.id] = { puntos: 0, faltasPersonales: 0, faltasTecnicas: 0, faltasAntideportivas: 0, faltasDescalificantes: 0, faltasTotales: 0, expulsado: false };
                 });
                 setStatsCache(cache);
-
-                // Inicializar Staff Cache
-                setStaffCache({
-                    local: matchData.staffLocal || {entrenador:'', asistente:''},
-                    visitante: matchData.staffVisitante || {entrenador:'', asistente:''}
-                });
             }
         }
     }, [matchData?.id]);
@@ -309,7 +391,8 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await updateDoc(doc(db, 'calendario', matchData.id), { gameLog: newLog });
     };
 
-    const handleStat = useCallback(async (player: Player, team: 'local'|'visitante', action: 'puntos'|'rebotes'|'asistencias'|'falta_P'|'falta_T'|'falta_U'|'falta_D', val: number) => {
+    // --- HANDLE STATS (AUTOMATIZACIÓN FIBA) ---
+    const handleStat = useCallback(async (player: Player, team: 'local'|'visitante', action: 'puntos'|'rebote_def'|'rebote_of'|'asistencias'|'falta_P'|'falta_T'|'falta_U'|'falta_D', val: number) => {
         if (!matchData || statsCache[player.id]?.expulsado) return; 
         const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
         const currentStats = statsCache[player.id] || { puntos:0, faltasPersonales:0, faltasTecnicas:0, faltasAntideportivas:0, faltasDescalificantes:0, faltasTotales:0, expulsado:false };
@@ -317,8 +400,22 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         let logText = '';
         let statField = ''; 
 
-        if (action.startsWith('falta')) setIsRunning(false);
-        if (action === 'puntos' && matchData.cuarto >= 4 && timeLeftRef.current <= 1200) setIsRunning(false);
+        // === AUTOMATIZACIÓN DEL RELOJ ===
+        // 1. REBOTE DEFENSIVO -> Reset 24s
+        if (action === 'rebote_def') handleResetShotClock(24);
+        // 2. REBOTE OFENSIVO -> Reset 14s
+        if (action === 'rebote_of') handleResetShotClock(14);
+        // 3. PUNTOS -> Reset 24s y posible paro de reloj
+        if (action === 'puntos') {
+            handleResetShotClock(24); 
+            if ((matchData.cuarto === 4 && timeLeftRef.current <= 1200) || matchData.cuarto > 4) setIsRunning(false);
+        }
+        // 4. FALTAS -> Parar reloj y Ajustar posesión
+        if (action.startsWith('falta')) {
+            setIsRunning(false);
+            if (shotClockRef.current < 140) handleResetShotClock(14);
+        }
+        // ================================
 
         if (action === 'puntos') {
             newStats.puntos += val;
@@ -339,9 +436,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 newStats.expulsado = true; logText += " (EXPULSADO POR ACUMULACIÓN)"; alert(`🟥 EXPULSADO: ${player.nombre}`);
             }
         } else {
-            statField = action;
-            if (action === 'rebotes') logText = `🖐️ Reb: ${player.nombre}`;
-            if (action === 'asistencias') logText = `🅰️ Asist: ${player.nombre}`;
+            if (action === 'rebote_def' || action === 'rebote_of') {
+                statField = 'rebotes';
+                logText = `🖐️ Reb (${action==='rebote_def'?'Def':'Of'}): ${player.nombre}`;
+            } else {
+                statField = action;
+                if (action === 'asistencias') logText = `🅰️ Asist: ${player.nombre}`;
+            }
         }
 
         setStatsCache(prev => ({ ...prev, [player.id]: newStats }));
@@ -352,6 +453,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await setDoc(statRef, payload, { merge: true });
     }, [matchData, statsCache]);
 
+    // ... (Staff Action, Timeout, Subs, etc. igual que antes)
     const handleStaffAction = async (team: 'local'|'visitante', action: 'falta_T'|'falta_D') => {
         if (!matchData) return;
         setIsRunning(false);
@@ -401,11 +503,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         if (!matchData) return;
         if (!window.confirm(`¿Iniciar Siguiente Periodo?`)) return;
         setIsRunning(false); setTimeLeft(6000); timeLeftRef.current = 6000;
+        handleResetShotClock(24); 
         let updatePayload: any = { cuarto: increment(1), faltasLocal: 0, faltasVisitante: 0 };
-        if (matchData.cuarto + 1 === 3) { updatePayload.timeoutsLocal = 3; updatePayload.timeoutsVisitante = 3; } 
-        else if (matchData.cuarto + 1 > 4) { updatePayload.timeoutsLocal = 1; updatePayload.timeoutsVisitante = 1; }
+        const nextQ = matchData.cuarto + 1;
+        if (nextQ === 3) { updatePayload.timeoutsLocal = 3; updatePayload.timeoutsVisitante = 3; } 
+        else if (nextQ > 4) { updatePayload.timeoutsLocal = 1; updatePayload.timeoutsVisitante = 1; }
         await updateDoc(doc(db, 'calendario', matchData.id), updatePayload);
-        addLog(`🕒 Inicio del Periodo ${matchData.cuarto + 1}`, 'period', 'system');
+        addLog(`🕒 Inicio del Periodo ${nextQ}`, 'period', 'system');
     };
 
     const handleFinalize = async () => {
@@ -421,21 +525,15 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
     const handleResetGame = async () => {
         if (!matchData || !window.confirm("⚠️ ¿REINICIAR TODO?")) return;
-        setIsRunning(false); setTimeLeft(6000); timeLeftRef.current = 6000;
+        setIsRunning(false); setTimeLeft(6000); timeLeftRef.current = 6000; setShotClock(240); shotClockRef.current = 240;
         const statsQ = query(collection(db, 'stats_partido'), where('partidoId', '==', matchData.id));
         const statsSnap = await getDocs(statsQ);
         await Promise.all(statsSnap.docs.map(d => deleteDoc(d.ref)));
-        
-        // Limpieza de estados locales
         const cleanCache = { ...statsCache }; Object.keys(cleanCache).forEach(key => cleanCache[key] = { puntos:0, faltasPersonales:0, faltasTecnicas:0, faltasAntideportivas:0, faltasDescalificantes:0, faltasTotales:0, expulsado:false });
         setStatsCache(cleanCache);
-        setStaffCache({ local: {entrenador: matchData.staffLocal?.entrenador||'', asistente:''}, visitante: {entrenador: matchData.staffVisitante?.entrenador||'', asistente:''} });
-        
-        // Limpiar rosters locales para forzar recarga desde DB
         setLocalOnCourt([]); setLocalBench([]); setVisitanteOnCourt([]); setVisitanteBench([]);
-
         await updateDoc(doc(db, 'calendario', matchData.id), { marcadorLocal: 0, marcadorVisitante: 0, faltasLocal: 0, faltasVisitante: 0, timeoutsLocal: 2, timeoutsVisitante: 2, cuarto: 1, gameLog: [], estatus: 'programado', staffLocal: null, staffVisitante: null });
-        alert("Reiniciado. La alineación se recargará desde la Forma 5 guardada.");
+        alert("Reiniciado.");
     };
 
     if (!selectedMatchId) return (
@@ -459,9 +557,9 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         <div style={{background:'#121212', height:'100vh', color:'white', display:'flex', flexDirection:'column', overflow:'hidden'}}>
             <style>{`.btn-stat { flex:1; padding:6px 0; font-size:0.75rem; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#2563eb; color:white; transition: opacity 0.1s; }.btn-stat:active { transform:scale(0.95); opacity:0.8; }.clock-btn { background:#333; color:white; border:1px solid #555; padding:4px 8px; cursor:pointer; font-size:0.75rem; border-radius:3px; font-weight:bold; backdrop-filter: blur(4px); background: rgba(50,50,50,0.8); }.bonus-indicator { font-size: 0.8rem; background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-top: 5px; animation: pulse 2s infinite; display:inline-block; box-shadow: 0 0 10px #ef4444; }.timeout-btn { background: #d97706; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; cursor: pointer; margin-top: 5px; display: block; width: 100%; transition: background 0.2s; }.timeout-btn:disabled { background: #555; color: #999; cursor: not-allowed; }`}</style>
             
-            <div style={{backgroundImage: 'url(https://i.postimg.cc/3R98dqnk/basketball_court_black_line_marking_260nw_2125177724.webp)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#000', padding:'8px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'2px solid #333', flexShrink:0}}>
+            <div style={{backgroundImage: 'url(https://i.postimg.cc/Kj11f2z8/cartoon-basketball-court-vector.jpg)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#000', padding:'8px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'2px solid #333', flexShrink:0}}>
                 <div style={{textAlign:'center', width:'25%'}}><div style={{color:'#60a5fa', fontWeight:'bold', fontSize:'0.9rem'}}>{matchData.equipoLocalNombre}</div><div style={{fontSize:'2.8rem', fontWeight:'bold', lineHeight:1}}>{matchData.marcadorLocal}</div><div style={{fontSize:'0.8rem', color:'#ccc'}}>FALTAS: {matchData.faltasLocal}</div>{matchData.faltasLocal >= 5 && <div className="bonus-indicator">BONUS</div>}<button className="timeout-btn" onClick={()=>handleTimeout('local')} disabled={(matchData.timeoutsLocal || 0) <= 0}>🕒 T. MUERTO ({(matchData.timeoutsLocal || 0)})</button></div>
-                <ClockDisplay timeLeft={timeLeft} isRunning={isRunning} periodo={matchData.cuarto} onToggle={handleToggleClock} onNextQuarter={handleNextQuarter} onAdjust={adjustTime} />
+                <ClockDisplay timeLeft={timeLeft} shotClock={shotClock} isRunning={isRunning} periodo={matchData.cuarto} onToggle={handleToggleClock} onNextQuarter={handleNextQuarter} onAdjust={adjustTime} onResetShot={handleResetShotClock} />
                 <div style={{textAlign:'center', width:'25%'}}><div style={{color:'#fbbf24', fontWeight:'bold', fontSize:'0.9rem'}}>{matchData.equipoVisitanteNombre}</div><div style={{fontSize:'2.8rem', fontWeight:'bold', lineHeight:1}}>{matchData.marcadorVisitante}</div><div style={{fontSize:'0.8rem', color:'#ccc'}}>FALTAS: {matchData.faltasVisitante}</div>{matchData.faltasVisitante >= 5 && <div className="bonus-indicator">BONUS</div>}<button className="timeout-btn" onClick={()=>handleTimeout('visitante')} disabled={(matchData.timeoutsVisitante || 0) <= 0}>🕒 T. MUERTO ({(matchData.timeoutsVisitante || 0)})</button></div>
             </div>
 
