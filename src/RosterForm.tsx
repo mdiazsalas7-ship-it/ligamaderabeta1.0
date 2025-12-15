@@ -1,58 +1,141 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, addDoc, getDocs, doc, deleteDoc } from 'firebase/firestore'; 
+import { collection, addDoc, getDocs, doc, deleteDoc, updateDoc, getDoc } from 'firebase/firestore';
 
-const RosterForm: React.FC<{ forma21Id: string; nombreEquipo: string; onSuccess: () => void; onClose?: () => void }> = ({ forma21Id, nombreEquipo, onSuccess, onClose }) => {
-    const [jugadores, setJugadores] = useState<any[]>([]);
-    const [nuevo, setNuevo] = useState({ nombre: '', numero: '', posicion: '' });
+interface Player { id: string; nombre: string; numero: number; }
+
+const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess: () => void, onClose: () => void }> = ({ forma21Id, nombreEquipo, onSuccess, onClose }) => {
+    const [players, setPlayers] = useState<Player[]>([]);
+    const [nombre, setNombre] = useState('');
+    const [numero, setNumero] = useState('');
+    
+    // CAMPOS PARA STAFF
+    const [entrenador, setEntrenador] = useState('');
+    const [asistente, setAsistente] = useState('');
 
     useEffect(() => {
-        getDocs(collection(db, 'forma21s', forma21Id, 'jugadores')).then(s => setJugadores(s.docs.map(d => ({id: d.id, ...d.data()})).sort((a:any,b:any)=>a.numero-b.numero)));
+        const fetchData = async () => {
+            // 1. Cargar Jugadores
+            const colRef = collection(db, 'forma21s', forma21Id, 'jugadores');
+            const snap = await getDocs(colRef);
+            setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Player)));
+
+            // 2. Cargar Staff existente
+            const docRef = doc(db, 'forma21s', forma21Id);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                if (data.entrenador) setEntrenador(data.entrenador);
+                if (data.asistente) setAsistente(data.asistente);
+            }
+        };
+        fetchData();
     }, [forma21Id]);
 
-    const add = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (jugadores.length >= 15) return alert("Máximo 15.");
-        await addDoc(collection(db, 'forma21s', forma21Id, 'jugadores'), { ...nuevo, numero: parseInt(nuevo.numero) });
-        setNuevo({ nombre: '', numero: '', posicion: '' });
-        getDocs(collection(db, 'forma21s', forma21Id, 'jugadores')).then(s => setJugadores(s.docs.map(d => ({id: d.id, ...d.data()})).sort((a:any,b:any)=>a.numero-b.numero)));
+    // --- FUNCIÓN CLAVE: INVALIDAR APROBACIÓN ---
+    // Si editan algo, el equipo vuelve a ser "pendiente" para que el Admin lo revise
+    const notifyChangeToAdmin = async () => {
+        const docRef = doc(db, 'forma21s', forma21Id);
+        await updateDoc(docRef, {
+            estatus: 'pendiente',
+            aprobado: false,
+            rosterCerrado: false 
+        });
     };
 
-    const del = async (id: string) => {
-        if(!window.confirm("¿Eliminar?")) return;
+    const handleAddPlayer = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!nombre || !numero) return;
+        
+        await addDoc(collection(db, 'forma21s', forma21Id, 'jugadores'), { 
+            nombre: nombre.toUpperCase(), 
+            numero: parseInt(numero),
+            equipoId: forma21Id 
+        });
+
+        // 🔔 Notificar cambio al admin
+        await notifyChangeToAdmin();
+
+        setNombre(''); setNumero('');
+        // Recargar lista
+        const colRef = collection(db, 'forma21s', forma21Id, 'jugadores');
+        const snap = await getDocs(colRef);
+        setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Player)));
+    };
+
+    const handleDelete = async (id: string) => {
+        if (!window.confirm("¿Eliminar jugador? El equipo volverá a estatus PENDIENTE para revisión.")) return;
+        
         await deleteDoc(doc(db, 'forma21s', forma21Id, 'jugadores', id));
-        setJugadores(p => p.filter(j => j.id !== id));
+        
+        // 🔔 Notificar cambio al admin
+        await notifyChangeToAdmin();
+
+        setPlayers(prev => prev.filter(p => p.id !== id));
+    };
+
+    const handleSaveStaff = async () => {
+        await updateDoc(doc(db, 'forma21s', forma21Id), {
+            entrenador: entrenador.toUpperCase(),
+            asistente: asistente.toUpperCase()
+        });
+
+        // 🔔 Notificar cambio al admin
+        await notifyChangeToAdmin();
+
+        alert("✅ Cuerpo Técnico actualizado. Tu equipo ha pasado a estatus PENDIENTE para revisión del Admin.");
     };
 
     return (
-        <div className="card animate-fade-in" style={{maxWidth: '800px', margin: '0 auto'}}>
-            <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px'}}>
-                <h2 style={{color:'var(--primary)'}}>Roster: {nombreEquipo}</h2>
-                {onClose && <button onClick={onClose} className="btn btn-secondary">← Volver</button>}
+        <div className="animate-fade-in" style={{background:'white', padding:'20px', borderRadius:'10px', maxWidth:'600px', margin:'20px auto', maxHeight:'90vh', overflowY:'auto'}}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px'}}>
+                <h2 style={{color:'var(--primary)', margin:0}}>Inscribir Roster: {nombreEquipo}</h2>
+                <button onClick={onClose} style={{background:'none', border:'none', fontSize:'1.5rem', cursor:'pointer'}}>✕</button>
             </div>
-            
-            <form onSubmit={add} style={{display:'grid', gridTemplateColumns:'2fr 1fr 1fr auto', gap:'10px', alignItems:'end', marginBottom:'20px', background:'#f9fafb', padding:'15px', borderRadius:'10px'}}>
-                <div><label>Nombre</label><input value={nuevo.nombre} onChange={e=>setNuevo({...nuevo, nombre:e.target.value})} required style={{marginBottom:0}} /></div>
-                <div><label>#</label><input type="number" value={nuevo.numero} onChange={e=>setNuevo({...nuevo, numero:e.target.value})} required style={{marginBottom:0}} /></div>
-                <div><label>Pos</label><select value={nuevo.posicion} onChange={e=>setNuevo({...nuevo, posicion:e.target.value})} required style={{marginBottom:0}}><option value="">Sel</option><option>Base</option><option>Escolta</option><option>Alero</option><option>Ala-Pívot</option><option>Pívot</option></select></div>
-                <button type="submit" className="btn btn-primary" style={{height:'46px'}}>Añadir</button>
+
+            {/* AVISO DE CAMBIOS */}
+            <div style={{
+                background: '#fff7ed', borderLeft: '4px solid #f97316', 
+                padding: '10px', marginBottom: '20px', fontSize: '0.85rem', color: '#9a3412'
+            }}>
+                ⚠️ <strong>Aviso:</strong> Cualquier cambio (agregar jugador, borrar o editar staff) cambiará el estatus de tu equipo a <strong>"PENDIENTE"</strong>. El administrador deberá aprobar los cambios nuevamente.
+            </div>
+
+            {/* SECCIÓN CUERPO TÉCNICO */}
+            <div style={{background:'#f0f9ff', padding:'15px', borderRadius:'8px', marginBottom:'20px', border:'1px solid #bae6fd'}}>
+                <h4 style={{margin:'0 0 10px 0', color:'#0369a1'}}>👔 Cuerpo Técnico</h4>
+                <div style={{display:'grid', gap:'10px', gridTemplateColumns:'1fr 1fr'}}>
+                    <div>
+                        <label style={{fontSize:'0.8rem', fontWeight:'bold'}}>Entrenador Principal:</label>
+                        <input className="input" value={entrenador} onChange={e=>setEntrenador(e.target.value)} placeholder="Nombre y Apellido" />
+                    </div>
+                    <div>
+                        <label style={{fontSize:'0.8rem', fontWeight:'bold'}}>Asistente:</label>
+                        <input className="input" value={asistente} onChange={e=>setAsistente(e.target.value)} placeholder="Nombre y Apellido" />
+                    </div>
+                </div>
+                <button onClick={handleSaveStaff} className="btn btn-secondary" style={{marginTop:'10px', width:'100%', fontSize:'0.8rem'}}>💾 Guardar Staff</button>
+            </div>
+
+            {/* SECCIÓN JUGADORES */}
+            <h4 style={{margin:'0 0 10px 0'}}>🏃 Jugadores ({players.length}/15)</h4>
+            <form onSubmit={handleAddPlayer} style={{display:'flex', gap:'10px', marginBottom:'20px'}}>
+                <input className="input" style={{width:'60px'}} type="number" placeholder="#" value={numero} onChange={e=>setNumero(e.target.value)} required />
+                <input className="input" style={{flex:1}} type="text" placeholder="Nombre del Jugador" value={nombre} onChange={e=>setNombre(e.target.value)} required />
+                <button type="submit" className="btn btn-primary" disabled={players.length >= 15}>+</button>
             </form>
 
-            <div className="table-responsive">
-                <table className="data-table">
-                    <thead><tr><th>#</th><th>Nombre</th><th>Posición</th><th>Acción</th></tr></thead>
-                    <tbody>
-                        {jugadores.map(j => (
-                            <tr key={j.id}>
-                                <td><b>{j.numero}</b></td><td>{j.nombre}</td><td>{j.posicion}</td>
-                                <td><button onClick={() => del(j.id)} className="btn btn-danger" style={{padding:'5px 10px', fontSize:'0.8rem'}}>X</button></td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+            <div style={{display:'grid', gap:'8px'}}>
+                {players.sort((a,b)=>a.numero - b.numero).map(p => (
+                    <div key={p.id} style={{display:'flex', justifyContent:'space-between', padding:'8px', background:'#f8f9fa', borderBottom:'1px solid #eee'}}>
+                        <strong>#{p.numero} - {p.nombre}</strong>
+                        <button onClick={()=>handleDelete(p.id)} style={{color:'red', border:'none', background:'none', cursor:'pointer'}}>Eliminar</button>
+                    </div>
+                ))}
             </div>
-            <div style={{textAlign:'right', marginTop:'20px'}}>
-                <button onClick={onSuccess} className="btn btn-success" disabled={jugadores.length < 10}>{jugadores.length>=10 ? 'Finalizar' : `Faltan ${10-jugadores.length}`}</button>
+
+            <div style={{marginTop:'20px', textAlign:'right'}}>
+                <button onClick={onSuccess} className="btn btn-primary">Terminar y Salir</button>
             </div>
         </div>
     );

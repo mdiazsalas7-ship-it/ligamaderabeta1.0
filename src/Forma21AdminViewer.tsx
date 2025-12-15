@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, query, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, getDocs, doc, updateDoc, setDoc } from 'firebase/firestore';
 
 interface Forma21 {
     id: string;
@@ -41,11 +41,26 @@ const Forma21AdminViewer: React.FC<{ onClose: () => void, setViewRosterId: (id: 
         fetchFormas();
     }, []);
 
-    const toggleAprobado = async (id: string, currentStatus: string | undefined) => {
+    const toggleAprobado = async (formaId: string, currentStatus: string | undefined, delegadoId: string, nombreEquipo: string) => {
         const nuevoEstado = currentStatus === 'aprobado' ? 'pendiente' : 'aprobado';
+        
+        if (nuevoEstado === 'aprobado') {
+             if (!window.confirm(`¿Aprobar definitivamente a ${nombreEquipo}? Esto cierra el Roster para el delegado.`)) return;
+        } else {
+             if (!window.confirm(`¿Rechazar a ${nombreEquipo}? El delegado podrá editar el Roster de nuevo.`)) return;
+        }
+
         try {
-            await updateDoc(doc(db, 'forma21s', id), { estatus: nuevoEstado, aprobado: nuevoEstado === 'aprobado' });
-            setFormas(prev => prev.map(f => f.id === id ? { ...f, estatus: nuevoEstado, aprobado: nuevoEstado === 'aprobado' } : f));
+            // 1. Actualizar estatus en Forma 21
+            await updateDoc(doc(db, 'forma21s', formaId), { estatus: nuevoEstado, aprobado: nuevoEstado === 'aprobado' });
+            
+            // 2. Actualizar estatus en la colección de Equipos (Tabla de Posiciones)
+            await updateDoc(doc(db, 'equipos', formaId), { estatus: nuevoEstado });
+
+            setFormas(prev => prev.map(f => f.id === formaId ? { ...f, estatus: nuevoEstado, aprobado: nuevoEstado === 'aprobado' } : f));
+            
+            alert(`Estatus de ${nombreEquipo} cambiado a ${nuevoEstado}.`);
+
         } catch (e) {
             console.error(e);
             alert("Error al actualizar estatus");
@@ -88,7 +103,7 @@ const Forma21AdminViewer: React.FC<{ onClose: () => void, setViewRosterId: (id: 
                                 </td>
                                 <td style={{padding:'15px', textAlign:'center'}}>
                                     <button 
-                                        onClick={() => toggleAprobado(f.id, f.estatus)}
+                                        onClick={() => toggleAprobado(f.id, f.estatus, f.delegadoId, f.nombreEquipo)}
                                         className={`btn ${f.estatus==='aprobado' ? 'btn-success' : 'btn-secondary'}`}
                                         style={{fontSize:'0.8rem', padding:'5px 10px'}}
                                     >

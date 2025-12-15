@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import './App.css'; 
 import { db, auth } from './firebase'; 
-import { collection, getDocs, doc, onSnapshot, query, where } from 'firebase/firestore'; 
+import { collection, getDocs, doc, onSnapshot, query, where, limit, orderBy } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth'; 
 import type { DocumentData } from 'firebase/firestore'; 
 
@@ -67,6 +67,10 @@ function App() {
   const [newsFeedView, setNewsFeedView] = useState(false);
   
   const [dataRefreshKey, setDataRefreshKey] = useState(0); 
+  
+  // Referencias para evitar notificaciones duplicadas al cargar
+  const initialLoadDone = useRef(false);
+
 
   const refreshData = () => { setDataRefreshKey(prev => prev + 1); closeAllViews(); };
 
@@ -76,7 +80,70 @@ function App() {
     setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false);
   };
   
-  // 1. Autenticación
+  // 1. SISTEMA DE NOTIFICACIONES
+  useEffect(() => {
+    // Pedir permiso al cargar la app
+    if ('Notification' in window && Notification.permission !== 'granted') {
+        Notification.requestPermission();
+    }
+  }, []);
+
+  const sendNotification = (title: string, body: string, icon = 'https://cdn-icons-png.flaticon.com/512/33/33308.png') => {
+      if ('Notification' in window && Notification.permission === 'granted') {
+          try {
+            // Utilizamos el tag para que no se muestren notificaciones duplicadas
+            new Notification(title, { body, icon, tag: title.replace(/\s/g, '_') });
+          } catch (e) {
+              console.log("Error enviando notificación push:", e);
+          }
+      }
+  };
+
+  // 2. DETECTOR DE CAMBIOS PARA NOTIFICACIONES Y LIVE MATCHES
+  useEffect(() => {
+      // A) DETECTAR INICIO DE PARTIDOS
+      const qMatches = query(collection(db, 'calendario')); 
+      const unsubMatches = onSnapshot(qMatches, (snap) => {
+          // Actualizar lista de partidos en vivo para el Dashboard
+          const lives = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => m.estatus === 'vivo');
+          setLiveMatches(lives);
+
+          // Notificaciones
+          if (initialLoadDone.current) {
+              snap.docChanges().forEach((change) => {
+                  const data = change.doc.data();
+                  // Notificar si el estatus cambia a 'vivo' (cuando se inicia el reloj por primera vez)
+                  if (change.type === 'modified' && data.estatus === 'vivo') {
+                      sendNotification(
+                          "🏀 ¡PARTIDO EN VIVO!", 
+                          `${data.equipoLocalNombre} vs ${data.equipoVisitanteNombre} ha comenzado.`
+                      );
+                  }
+              });
+          }
+      });
+
+      // B) DETECTAR NOTICIAS NUEVAS
+      const qNews = query(collection(db, 'noticias'), orderBy('fecha', 'desc'), limit(1));
+      const unsubNews = onSnapshot(qNews, (snap) => {
+          if (initialLoadDone.current) {
+             snap.docChanges().forEach((change) => {
+                 // Solo si se acaba de agregar una noticia
+                 if (change.type === 'added') {
+                     const data = change.doc.data();
+                     sendNotification("📢 Nueva Noticia", data.titulo || "Información importante de la Liga.");
+                 }
+             });
+          }
+      });
+
+      // Marcar que la carga inicial terminó después de 2 segundos para no enviar notificaciones viejas
+      setTimeout(() => { initialLoadDone.current = true; }, 2000);
+
+      return () => { unsubMatches(); unsubNews(); };
+  }, []);
+  
+  // 3. Autenticación
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (u) => {
       if (u) {
@@ -93,18 +160,7 @@ function App() {
     return () => unsubAuth();
   }, []);
 
-  // 2. DETECTOR DE JUEGOS EN VIVO (Esto hace que aparezca el botón rojo automáticamente)
-  useEffect(() => {
-      // Escucha CONSTANTE de partidos con estatus 'vivo'
-      const q = query(collection(db, 'calendario'), where('estatus', '==', 'vivo'));
-      const unsub = onSnapshot(q, (snap) => {
-          const lives = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          setLiveMatches(lives);
-      });
-      return () => unsub();
-  }, []);
-
-  // 3. Carga de Datos General
+  // 4. Carga de Datos General
   useEffect(() => {
     if (!user || user.rol === 'pendiente') return;
     const loadData = async () => {
@@ -138,9 +194,39 @@ function App() {
   if (loading) return <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100vh'}}>Cargando...</div>;
   if (!user) return <Login />;
   
-  if (user.rol === 'pendiente') return (
-    <div className="login-wrapper"><div className="login-box"><h2>⏳ Cuenta en Revisión</h2><p>Tu solicitud está siendo procesada.</p><button onClick={()=>signOut(auth)} className="btn">Cerrar Sesión</button></div></div>
-  );
+  // --- Manejo de rol 'pendiente' ---
+  if (user.rol === 'pendiente') {
+      return (
+        <div className="login-wrapper">
+            {registroView ? (
+                <RegistroForma21 
+                    onSuccess={() => {
+                        window.location.reload(); 
+                    }} 
+                    onClose={() => setRegistroView(false)} 
+                />
+            ) : (
+                <div className="login-box" style={{textAlign:'center'}}>
+                    <h2>👋 ¡Bienvenido a la Liga!</h2>
+                    <p>Has creado tu cuenta correctamente.</p>
+                    <p style={{marginBottom:'20px', color:'#666'}}>Para comenzar, debes registrar a tu equipo como Delegado.</p>
+                    
+                    <button 
+                        onClick={() => setRegistroView(true)} 
+                        className="btn btn-primary" 
+                        style={{width:'100%', marginBottom:'10px', padding:'12px', fontSize:'1rem'}}
+                    >
+                        📝 Inscribir mi Equipo
+                    </button>
+                    
+                    <button onClick={()=>signOut(auth)} className="btn btn-secondary" style={{width:'100%'}}>
+                        Cerrar Sesión
+                    </button>
+                </div>
+            )}
+        </div>
+      );
+  }
 
   const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView);
 

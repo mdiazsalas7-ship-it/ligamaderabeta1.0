@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
+// import LogoUploader from './LogoUploader'; // DESACTIVADO PARA QUE NO FALLE
 
 interface Forma21 { 
     id: string; 
@@ -112,12 +113,14 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
     }
 
     const miEquipo = formas21[0];
+    const isApproved = miEquipo.estatus === 'aprobado';
+    const canEditRoster = !isApproved; 
 
     return (
         <div className="animate-fade-in">
             {/* SECCIÓN 1: ESTADO DEL EQUIPO */}
             <div className="dashboard-grid" style={{marginBottom:'30px'}}>
-                <div className="dashboard-card" style={{cursor:'default', borderLeft: miEquipo.estatus==='aprobado'?'4px solid #10b981':'4px solid #f59e0b'}}>
+                <div className="dashboard-card" style={{cursor:'default', borderLeft: isApproved?'4px solid #10b981':'4px solid #f59e0b', height:'auto'}}>
                     <div style={{display:'flex', alignItems:'center', gap:'15px', marginBottom:'10px'}}>
                         {miEquipo.logoUrl ? 
                             <img src={miEquipo.logoUrl} alt="Logo" style={{width:'50px', height:'50px', borderRadius:'50%', objectFit:'cover'}} /> :
@@ -127,35 +130,43 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
                             <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{miEquipo.nombreEquipo}</div>
                             <div style={{
                                 fontSize:'0.8rem', fontWeight:'bold', 
-                                color: miEquipo.estatus==='aprobado' ? '#10b981' : '#f59e0b'
+                                color: isApproved ? '#10b981' : '#f59e0b'
                             }}>
-                                {miEquipo.estatus === 'aprobado' ? '✅ APROBADO' : '⏳ EN REVISIÓN'}
+                                {isApproved ? '✅ APROBADO' : '⏳ PENDIENTE DE APROBACIÓN'}
                             </div>
                         </div>
+                    </div>
+                    
+                    {/* ZONA DE LOGO DESACTIVADA TEMPORALMENTE */}
+                    <div style={{marginTop:'10px', paddingTop:'10px', borderTop:'1px solid #eee'}}>
+                        <p style={{fontSize:'0.75rem', color:'#999'}}>
+                           (Opción de subir logo deshabilitada temporalmente para pruebas)
+                        </p>
                     </div>
                 </div>
 
                 <div className="dashboard-card" onClick={() => setViewRosterId(miEquipo.id)} style={{cursor:'pointer', borderLeft:'4px solid #3b82f6'}}>
                     <div style={{fontSize:'2rem', marginBottom:'5px'}}>👥</div>
                     <div style={{fontWeight:'bold'}}>Ver Roster</div>
-                    <div style={{fontSize:'0.8rem', color:'#666'}}>Consultar jugadores</div>
+                    <div style={{fontSize:'0.8rem', color:'#666'}}>{miEquipo.rosterCompleto ? 'Roster Completo' : 'Roster Incompleto'}</div>
                 </div>
 
-                {miEquipo.estatus !== 'aprobado' && (
-                    <div className="dashboard-card" onClick={() => setSelectedFormId(miEquipo.id)} style={{cursor:'pointer', borderLeft:'4px solid #8b5cf6'}}>
-                        <div style={{fontSize:'2rem', marginBottom:'5px'}}>✏️</div>
-                        <div style={{fontWeight:'bold'}}>Editar Forma 21</div>
-                        <div style={{fontSize:'0.8rem', color:'#666'}}>Modificar datos</div>
+                <div className="dashboard-card" onClick={canEditRoster ? () => setSelectedFormId(miEquipo.id) : undefined} 
+                     style={{cursor: canEditRoster ? 'pointer' : 'not-allowed', opacity: canEditRoster ? 1 : 0.6, borderLeft:'4px solid #8b5cf6'}}>
+                    <div style={{fontSize:'2rem', marginBottom:'5px'}}>{canEditRoster ? '✏️' : '🔒'}</div>
+                    <div style={{fontWeight:'bold'}}>{canEditRoster ? 'Editar Roster' : 'Roster Cerrado'}</div>
+                    <div style={{fontSize:'0.8rem', color:'#666'}}>
+                        {canEditRoster ? 'Añadir/modificar jugadores' : 'Solo Admin puede modificar'}
                     </div>
-                )}
+                </div>
             </div>
 
-            {/* SECCIÓN 2: PRÓXIMOS PARTIDOS Y FORMA 5 */}
-            {miEquipo.estatus === 'aprobado' && (
+            {/* SECCIÓN 2: PRÓXIMOS PARTIDOS */}
+            {isApproved && (
                 <div style={{marginTop:'30px'}}>
                     <h3 style={{color:'var(--primary)', marginBottom:'15px', display:'flex', alignItems:'center', gap:'10px'}}>
                         🏀 Próximos Partidos
-                        <span style={{fontSize:'0.8rem', fontWeight:'normal', color:'#666'}}>(Define tu alineación aquí)</span>
+                        <span style={{fontSize:'0.8rem', fontWeight:'normal', color:'#666'}}>(Define tu alineación)</span>
                     </h3>
 
                     {loadingMatches ? <div style={{textAlign:'center'}}>Cargando calendario...</div> : 
@@ -170,7 +181,6 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
                                     display:'flex', justifyContent:'space-between', alignItems:'center', 
                                     borderLeft:'5px solid var(--accent)', flexWrap:'wrap', gap:'15px'
                                 }}>
-                                    {/* INFO DEL JUEGO */}
                                     <div style={{flex:1, minWidth:'200px'}}>
                                         <div style={{fontSize:'0.85rem', color:'#666', marginBottom:'4px'}}>
                                             📅 {m.fechaAsignada} - ⏰ {m.hora} | 📍 {m.cancha}
@@ -179,16 +189,11 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
                                             {m.esLocal ? '🏠 Tú' : m.equipoLocalNombre} vs {!m.esLocal ? '✈️ Tú' : m.equipoVisitanteNombre}
                                         </div>
                                     </div>
-
-                                    {/* BOTÓN DE ACCIÓN */}
                                     <div>
                                         <button 
                                             onClick={() => setSelectForma5MatchId(m.id)}
                                             className="btn btn-primary"
-                                            style={{
-                                                display:'flex', alignItems:'center', gap:'8px', 
-                                                boxShadow:'0 4px 6px rgba(37, 99, 235, 0.2)'
-                                            }}
+                                            style={{display:'flex', alignItems:'center', gap:'8px'}}
                                         >
                                             📋 Cargar Alineación (Forma 5)
                                         </button>
