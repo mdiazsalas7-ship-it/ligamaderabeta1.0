@@ -17,11 +17,14 @@ interface PlayerStat {
 
 const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: string }> = ({ matchId, onClose, rol }) => {
     const [match, setMatch] = useState<any>(null);
+    const [logos, setLogos] = useState<{local: string, visitante: string}>({ local: '', visitante: '' });
     const [statsA, setStatsA] = useState<PlayerStat[]>([]);
     const [statsB, setStatsB] = useState<PlayerStat[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [activeTab, setActiveTab] = useState<'A'|'B'>('A');
+
+    const DEFAULT_LOGO = "https://cdn-icons-png.flaticon.com/512/166/166344.png";
 
     useEffect(() => {
         const loadData = async () => {
@@ -33,22 +36,35 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                     const data = matchSnap.data();
                     setMatch({ id: matchSnap.id, ...data });
 
+                    // 2. Cargar Logos (Buscando en colección equipos por nombre)
+                    // Si tienes IDs de equipo en el calendario, sería mejor usarlos, pero por nombre funciona si son únicos.
+                    const qEquipos = query(collection(db, 'equipos'));
+                    const equiposSnap = await getDocs(qEquipos);
+                    let logoL = DEFAULT_LOGO;
+                    let logoV = DEFAULT_LOGO;
+
+                    equiposSnap.forEach(d => {
+                        const eq = d.data();
+                        if (eq.nombre === data.equipoLocalNombre && eq.logoUrl) logoL = eq.logoUrl;
+                        if (eq.nombre === data.equipoVisitanteNombre && eq.logoUrl) logoV = eq.logoUrl;
+                    });
+                    setLogos({ local: logoL, visitante: logoV });
+
                     const idA = data.equipoLocalId;
                     const idB = data.equipoVisitanteId;
 
-                    // --- FUNCIÓN DE EXTRACCIÓN SEGURA (PROTEGE CONTRA CRASHES) ---
+                    // Extracción segura de rosters
                     const getRoster = (teamId: string) => {
                         if (!data.forma5 || !teamId) return [];
                         const raw = data.forma5[teamId];
-                        if (Array.isArray(raw)) return raw; // Formato viejo
-                        if (raw?.jugadores) return raw.jugadores; // Formato nuevo
-                        return []; // Si no hay nada, array vacío
+                        if (Array.isArray(raw)) return raw;
+                        if (raw?.jugadores) return raw.jugadores;
+                        return [];
                     };
 
                     const rosterA = getRoster(idA);
                     const rosterB = getRoster(idB);
 
-                    // Cargar Stats
                     const statsQuery = query(collection(db, 'stats_partido'), where('partidoId', '==', matchId));
                     const statsSnap = await getDocs(statsQuery);
                     const statsMap: Record<string, any> = {};
@@ -72,8 +88,8 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                         };
                     };
 
-                    setStatsA(rosterA.map(mapToStat));
-                    setStatsB(rosterB.map(mapToStat));
+                    setStatsA(rosterA.map(mapToStat).sort((a:any, b:any) => b.puntos - a.puntos));
+                    setStatsB(rosterB.map(mapToStat).sort((a:any, b:any) => b.puntos - a.puntos));
                 }
             } catch (e) { console.error(e); } finally { setLoading(false); }
         };
@@ -133,36 +149,58 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                 backgroundColor: 'white', width: '100%', maxWidth: '1000px', height: '90vh', borderRadius: '12px',
                 display: 'flex', flexDirection: 'column', overflow: 'hidden'
             }}>
-                {/* CABECERA */}
-                <div style={{padding: '20px', background:'var(--primary)', color:'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                    <div>
-                        <h2 style={{margin: 0, fontSize: '1.2rem'}}>📝 Box Score Oficial</h2>
-                        <span style={{fontSize: '0.9rem', opacity: 0.9}}>
-                            {match?.equipoLocalNombre} {match?.marcadorLocal} - {match?.marcadorVisitante} {match?.equipoVisitanteNombre}
-                        </span>
+                {/* CABECERA CON LOGOS */}
+                <div style={{
+                    padding: '20px', background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)', 
+                    color: 'white', display: 'flex', flexDirection:'column', alignItems: 'center', position:'relative'
+                }}>
+                    <button onClick={onClose} style={{position:'absolute', top:'15px', right:'15px', background:'rgba(255,255,255,0.2)', color:'white', border:'none', width:'30px', height:'30px', borderRadius:'50%', cursor:'pointer'}}>✕</button>
+                    
+                    <div style={{fontSize:'0.8rem', color:'#94a3b8', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px'}}>RESULTADO FINAL</div>
+                    
+                    <div style={{display:'flex', alignItems:'center', gap:'30px', width:'100%', justifyContent:'center'}}>
+                        {/* LOCAL */}
+                        <div style={{textAlign:'center', width:'150px'}}>
+                            <div style={{width:'70px', height:'70px', margin:'0 auto 10px', borderRadius:'50%', background:'white', padding:'2px', border:'2px solid #3b82f6', display:'flex', alignItems:'center', justifyContent:'center'}}>
+                                <img src={logos.local} style={{width:'100%', height:'100%', borderRadius:'50%', objectFit:'cover'}} onError={(e)=>{(e.target as HTMLImageElement).src=DEFAULT_LOGO}}/>
+                            </div>
+                            <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{match?.equipoLocalNombre}</div>
+                        </div>
+
+                        {/* SCORE */}
+                        <div style={{background:'white', color:'black', padding:'10px 25px', borderRadius:'12px', fontSize:'3rem', fontWeight:'900', boxShadow:'0 0 20px rgba(255,255,255,0.2)'}}>
+                            {match?.marcadorLocal} - {match?.marcadorVisitante}
+                        </div>
+
+                        {/* VISITANTE */}
+                        <div style={{textAlign:'center', width:'150px'}}>
+                            <div style={{width:'70px', height:'70px', margin:'0 auto 10px', borderRadius:'50%', background:'white', padding:'2px', border:'2px solid #f59e0b', display:'flex', alignItems:'center', justifyContent:'center'}}>
+                                <img src={logos.visitante} style={{width:'100%', height:'100%', borderRadius:'50%', objectFit:'cover'}} onError={(e)=>{(e.target as HTMLImageElement).src=DEFAULT_LOGO}}/>
+                            </div>
+                            <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{match?.equipoVisitanteNombre}</div>
+                        </div>
                     </div>
-                    <button onClick={onClose} className="btn" style={{background:'rgba(255,255,255,0.2)', color:'white', border:'none'}}>Cerrar</button>
                 </div>
 
                 {/* MVP CARD */}
                 {gameMVP && getValuation(gameMVP) > 0 && (
                     <div style={{
-                        background: 'linear-gradient(to right, #0f172a, #334155)', color:'white', padding:'15px 20px',
-                        display:'flex', alignItems:'center', gap:'20px', borderBottom:'4px solid #fbbf24'
+                        background: '#f8fafc', color:'#334155', padding:'15px 20px',
+                        display:'flex', alignItems:'center', gap:'20px', borderBottom:'1px solid #e2e8f0'
                     }}>
                         <div style={{fontSize:'2.5rem'}}>🏆</div>
                         <div>
-                            <div style={{fontSize:'0.8rem', color:'#fbbf24', fontWeight:'bold', letterSpacing:'1px'}}>MVP DEL PARTIDO</div>
-                            <div style={{fontSize:'1.3rem', fontWeight:'bold'}}>{gameMVP.nombre}</div>
-                            <div style={{fontSize:'0.9rem', color:'#cbd5e1'}}>
+                            <div style={{fontSize:'0.7rem', color:'#f59e0b', fontWeight:'bold', letterSpacing:'1px', textTransform:'uppercase'}}>MVP del Partido</div>
+                            <div style={{fontSize:'1.2rem', fontWeight:'bold'}}>{gameMVP.nombre}</div>
+                            <div style={{fontSize:'0.8rem', color:'#64748b'}}>
                                 {statsA.includes(gameMVP) ? match?.equipoLocalNombre : match?.equipoVisitanteNombre}
                             </div>
                         </div>
                         <div style={{marginLeft:'auto', textAlign:'right'}}>
-                            <div style={{fontSize:'1.8rem', fontWeight:'bold', color:'#fbbf24'}}>{getValuation(gameMVP)}</div>
-                            <div style={{fontSize:'0.7rem', color:'#94a3b8'}}>VALORACIÓN</div>
+                            <div style={{fontSize:'1.5rem', fontWeight:'bold', color:'#3b82f6'}}>{getValuation(gameMVP)}</div>
+                            <div style={{fontSize:'0.6rem', color:'#94a3b8'}}>VAL</div>
                         </div>
-                        <div style={{borderLeft:'1px solid #475569', paddingLeft:'15px', display:'flex', gap:'15px', fontSize:'0.9rem'}}>
+                        <div style={{borderLeft:'1px solid #cbd5e1', paddingLeft:'15px', display:'flex', gap:'15px', fontSize:'0.9rem'}}>
                             <div><b>{gameMVP.puntos}</b> PTS</div>
                             <div><b>{gameMVP.rebotes}</b> REB</div>
                             <div><b>{gameMVP.asistencias}</b> AST</div>
@@ -172,11 +210,13 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
 
                 {/* TABS */}
                 <div style={{display:'flex', borderBottom:'1px solid #ddd'}}>
-                    <button onClick={()=>setActiveTab('A')} style={{flex:1, padding:'15px', border:'none', background: activeTab==='A' ? 'white' : '#f5f5f5', fontWeight:'bold', borderBottom: activeTab==='A' ? '3px solid var(--primary)' : 'none', cursor:'pointer', color:'#333'}}>
-                        🏠 {match?.equipoLocalNombre}
+                    <button onClick={()=>setActiveTab('A')} style={{flex:1, padding:'15px', border:'none', background: activeTab==='A' ? 'white' : '#f5f5f5', fontWeight:'bold', borderBottom: activeTab==='A' ? '3px solid #3b82f6' : 'none', cursor:'pointer', color:'#333', display:'flex', alignItems:'center', justifyContent:'center', gap:'10px'}}>
+                        <img src={logos.local} style={{width:'20px', height:'20px', borderRadius:'50%'}} onError={(e)=>{(e.target as HTMLImageElement).src=DEFAULT_LOGO}}/>
+                        {match?.equipoLocalNombre}
                     </button>
-                    <button onClick={()=>setActiveTab('B')} style={{flex:1, padding:'15px', border:'none', background: activeTab==='B' ? 'white' : '#f5f5f5', fontWeight:'bold', borderBottom: activeTab==='B' ? '3px solid var(--accent)' : 'none', cursor:'pointer', color:'#333'}}>
-                        ✈️ {match?.equipoVisitanteNombre}
+                    <button onClick={()=>setActiveTab('B')} style={{flex:1, padding:'15px', border:'none', background: activeTab==='B' ? 'white' : '#f5f5f5', fontWeight:'bold', borderBottom: activeTab==='B' ? '3px solid #f59e0b' : 'none', cursor:'pointer', color:'#333', display:'flex', alignItems:'center', justifyContent:'center', gap:'10px'}}>
+                        <img src={logos.visitante} style={{width:'20px', height:'20px', borderRadius:'50%'}} onError={(e)=>{(e.target as HTMLImageElement).src=DEFAULT_LOGO}}/>
+                        {match?.equipoVisitanteNombre}
                     </button>
                 </div>
 
@@ -192,7 +232,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                                 <th style={{padding: '5px', textAlign: 'center', width: '50px'}}>AST</th>
                                 <th style={{padding: '5px', textAlign: 'center', width: '50px'}}>ROB</th>
                                 <th style={{padding: '5px', textAlign: 'center', width: '50px'}}>BLK</th>
-                                <th style={{padding: '5px', textAlign: 'center', width: '50px'}}>FAL</th>
+                                <th style={{padding: '5px', textAlign: 'center', width: '50px', color:'#ef4444'}}>FAL</th>
                             </tr>
                         </thead>
                         <tbody>

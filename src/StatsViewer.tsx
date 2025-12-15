@@ -7,19 +7,19 @@ interface PlayerStat {
     jugadorId: string;
     nombre: string;
     equipo: string;
-    // Totales (para cálculo)
+    // Totales
     totalPuntos: number;
     totalRebotes: number;
     totalAsistencias: number;
     totalTriples: number;
     totalValoracion: number;
     partidosJugados: number;
-    // Promedios (para mostrar)
-    ppg: number; // Puntos por juego
-    rpg: number; // Rebotes por juego
-    apg: number; // Asistencias por juego
-    tpg: number; // Triples por juego
-    valpg: number; // Valoración por juego
+    // Promedios
+    ppg: number; 
+    rpg: number; 
+    apg: number; 
+    tpg: number; 
+    valpg: number; 
     logoUrl?: string;
 }
 
@@ -33,11 +33,13 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     }>({ mvp: [], puntos: [], rebotes: [], asistencias: [], triples: [] } as any);
     
     const [loading, setLoading] = useState(true);
+    
+    const DEFAULT_LOGO = "https://cdn-icons-png.flaticon.com/512/166/166344.png";
 
     useEffect(() => {
         const fetchStats = async () => {
             try {
-                // 1. Obtener Logos
+                // 1. Obtener Logos de Equipos
                 const equiposSnap = await getDocs(collection(db, 'equipos'));
                 const teamLogos: Record<string, string> = {};
                 equiposSnap.forEach(d => {
@@ -64,25 +66,27 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                             totalPuntos: 0, totalRebotes: 0, totalAsistencias: 0, totalRobos: 0, 
                             totalBloqueos: 0, totalFaltas: 0, totalTriples: 0,
                             partidosJugados: 0,
-                            logoUrl: teamLogos[stat.equipo] || undefined
+                            // Asignamos el logo aquí
+                            logoUrl: teamLogos[stat.equipo] || DEFAULT_LOGO
                         };
                     }
                     const acc = aggregated[stat.jugadorId];
-                    acc.totalPuntos += (stat.puntos || 0);
-                    acc.totalRebotes += (stat.rebotes || 0);
-                    acc.totalAsistencias += (stat.asistencias || 0);
-                    acc.totalRobos += (stat.robos || 0);
-                    acc.totalBloqueos += (stat.bloqueos || 0);
-                    acc.totalFaltas += (stat.faltas || 0);
-                    acc.totalTriples += (stat.triples || 0);
+                    acc.totalPuntos += (Number(stat.puntos) || 0);
+                    acc.totalRebotes += (Number(stat.rebotes) || 0);
+                    acc.totalAsistencias += (Number(stat.asistencias) || 0);
+                    acc.totalRobos += (Number(stat.robos) || 0);
+                    acc.totalBloqueos += (Number(stat.bloqueos) || 0);
+                    acc.totalFaltas += (Number(stat.faltas) || 0);
+                    acc.totalTriples += (Number(stat.triples) || 0);
+                    // Contamos partidos únicos (asumiendo que viene una stat por jugador por partido)
                     acc.partidosJugados += 1;
                 });
 
                 // 4. Calcular Promedios
                 const processedPlayers: PlayerStat[] = Object.values(aggregated).map((p: any) => {
-                    const games = p.partidosJugados || 1; // Evitar división por cero
+                    const games = p.partidosJugados || 1; 
                     
-                    // Valoración Total Simple
+                    // Valoración (Eficiencia simple)
                     const valoracionTotal = (p.totalPuntos + p.totalRebotes + p.totalAsistencias + p.totalRobos + p.totalBloqueos) - p.totalFaltas;
 
                     return {
@@ -96,17 +100,20 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                     };
                 });
 
-                // 5. Ordenar por PROMEDIOS
+                // 5. Ordenar y Cortar (Top 10)
+                // Filtramos jugadores con 0 partidos o stats vacías para limpiar la lista
+                const activePlayers = processedPlayers.filter(p => p.partidosJugados > 0);
+
                 setLeaders({
-                    mvp: [...processedPlayers].sort((a,b) => b.valpg - a.valpg).slice(0, 10),
-                    puntos: [...processedPlayers].sort((a,b) => b.ppg - a.ppg).slice(0, 10),
-                    rebotes: [...processedPlayers].sort((a,b) => b.rpg - a.rpg).slice(0, 10),
-                    asistencias: [...processedPlayers].sort((a,b) => b.apg - a.apg).slice(0, 10),
-                    triples: [...processedPlayers].sort((a,b) => b.tpg - a.tpg).slice(0, 10),
+                    mvp: [...activePlayers].sort((a,b) => b.valpg - a.valpg).slice(0, 10),
+                    puntos: [...activePlayers].sort((a,b) => b.ppg - a.ppg).slice(0, 10),
+                    rebotes: [...activePlayers].sort((a,b) => b.rpg - a.rpg).slice(0, 10),
+                    asistencias: [...activePlayers].sort((a,b) => b.apg - a.apg).slice(0, 10),
+                    triples: [...activePlayers].sort((a,b) => b.tpg - a.tpg).slice(0, 10),
                 });
 
             } catch (error) {
-                console.error(error);
+                console.error("Error calculando líderes:", error);
             } finally {
                 setLoading(false);
             }
@@ -115,60 +122,131 @@ const StatsViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     }, []);
 
     const LeaderCard = ({ title, data, icon, color, label }: any) => (
-        <div style={{background:'white', borderRadius:'12px', padding:'20px', boxShadow:'0 4px 6px rgba(0,0,0,0.05)', borderTop:`4px solid ${color}`}}>
-            <div style={{display:'flex', alignItems:'center', gap:'10px', marginBottom:'15px'}}>
-                <span style={{fontSize:'1.5rem'}}>{icon}</span>
-                <h3 style={{margin:0, color:'#374151', fontSize:'1.1rem', textTransform:'uppercase'}}>{title}</h3>
+        <div style={{
+            background:'white', borderRadius:'12px', padding:'20px', 
+            boxShadow:'0 10px 15px -3px rgba(0,0,0,0.1)', borderTop:`4px solid ${color}`,
+            display: 'flex', flexDirection: 'column', height: '100%'
+        }}>
+            <div style={{display:'flex', alignItems:'center', gap:'10px', marginBottom:'15px', paddingBottom:'10px', borderBottom:'1px solid #f3f4f6'}}>
+                <span style={{fontSize:'1.8rem'}}>{icon}</span>
+                <h3 style={{margin:0, color:'#1f2937', fontSize:'1.1rem', textTransform:'uppercase', letterSpacing:'0.5px'}}>{title}</h3>
             </div>
-            <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
-                {data.map((p: PlayerStat, i: number) => (
-                    <div key={p.id} style={{display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom: i<9?'1px solid #f3f4f6':'none', paddingBottom: i<9?'8px':'0'}}>
-                        <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
-                            <span style={{fontWeight:'bold', color: i===0?color:'#9ca3af', width:'20px', fontSize: i===0?'1.2rem':'1rem'}}>{i+1}</span>
-                            {p.logoUrl ? 
-                                <img src={p.logoUrl} style={{width:'28px', height:'28px', borderRadius:'50%', border:'1px solid #eee'}} alt=""/> :
-                                <span style={{fontSize:'1.2rem'}}>👤</span>
-                            }
-                            <div>
-                                <div style={{fontWeight:'bold', fontSize:'0.9rem', color:'#1f2937'}}>{p.nombre}</div>
-                                <div style={{fontSize:'0.75rem', color:'#6b7280'}}>
-                                    {p.equipo} • <span style={{fontSize:'0.7rem'}}>({p.partidosJugados} JJ)</span>
+            
+            <div style={{display:'flex', flexDirection:'column', gap:'12px', flex:1}}>
+                {data.map((p: PlayerStat, i: number) => {
+                    // Colores de medalla para el Top 3
+                    const rankColor = i === 0 ? '#fbbf24' : i === 1 ? '#9ca3af' : i === 2 ? '#b45309' : '#6b7280';
+                    const isTop1 = i === 0;
+
+                    return (
+                        <div key={p.id} style={{
+                            display:'flex', alignItems:'center', justifyContent:'space-between', 
+                            background: isTop1 ? '#fdf8e8' : 'transparent', // Resaltar al #1
+                            padding: isTop1 ? '8px' : '0', borderRadius: isTop1 ? '8px' : '0'
+                        }}>
+                            <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
+                                {/* RANGO */}
+                                <div style={{
+                                    fontWeight:'900', color: rankColor, width:'20px', textAlign:'center',
+                                    fontSize: isTop1 ? '1.2rem' : '0.9rem'
+                                }}>
+                                    {i+1}
+                                </div>
+                                
+                                {/* LOGO EQUIPO */}
+                                <div style={{
+                                    width: isTop1 ? '35px' : '28px', height: isTop1 ? '35px' : '28px', 
+                                    borderRadius:'50%', border:'1px solid #e5e7eb', background:'white',
+                                    display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden'
+                                }}>
+                                    <img 
+                                        src={p.logoUrl || DEFAULT_LOGO} 
+                                        style={{width:'100%', height:'100%', objectFit:'cover'}} 
+                                        alt={p.equipo}
+                                        onError={(e)=>{(e.target as HTMLImageElement).src=DEFAULT_LOGO}}
+                                    />
+                                </div>
+
+                                {/* INFO JUGADOR */}
+                                <div>
+                                    <div style={{fontWeight:'bold', fontSize: isTop1 ? '0.95rem' : '0.85rem', color:'#111827'}}>
+                                        {p.nombre}
+                                    </div>
+                                    <div style={{fontSize:'0.7rem', color:'#6b7280'}}>
+                                        {p.equipo}
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        <div style={{textAlign:'right'}}>
-                            <div style={{fontWeight:'900', fontSize:'1.2rem', color:color}}>
-                                {title.includes('MVP') ? p.valpg : 
-                                 title.includes('Puntos') ? p.ppg : 
-                                 title.includes('Rebotes') ? p.rpg : 
-                                 title.includes('Asistencias') ? p.apg : p.tpg}
+
+                            {/* VALOR ESTADÍSTICO */}
+                            <div style={{textAlign:'right'}}>
+                                <div style={{fontWeight:'900', fontSize: isTop1 ? '1.3rem' : '1rem', color: color}}>
+                                    {title.includes('MVP') ? p.valpg : 
+                                     title.includes('Puntos') ? p.ppg : 
+                                     title.includes('Rebotes') ? p.rpg : 
+                                     title.includes('Asistencias') ? p.apg : p.tpg}
+                                </div>
+                                {isTop1 && <div style={{fontSize:'0.6rem', color:'#9ca3af', fontWeight:'bold', textTransform:'uppercase'}}>{label}</div>}
                             </div>
-                            <div style={{fontSize:'0.6rem', color:'#999', fontWeight:'bold'}}>{label}</div>
                         </div>
-                    </div>
-                ))}
-                {data.length === 0 && <div style={{color:'#999', textAlign:'center', fontSize:'0.9rem'}}>Sin datos</div>}
+                    );
+                })}
+                {data.length === 0 && <div style={{color:'#9ca3af', textAlign:'center', padding:'20px', fontStyle:'italic'}}>No hay datos registrados aún.</div>}
             </div>
         </div>
     );
 
     return (
         <div className="animate-fade-in" style={{
-            position:'fixed', top:0, left:0, right:0, bottom:0, background:'#f3f4f6', zIndex:1500,
-            display:'flex', flexDirection:'column', overflow:'hidden'
+            position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.9)', zIndex:2000,
+            display:'flex', justifyContent:'center', alignItems:'center', padding:'20px'
         }}>
-            <div style={{padding:'15px 20px', background:'white', borderBottom:'1px solid #eee', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                <h2 style={{color:'var(--primary)', margin:0, fontSize:'1.2rem'}}>📊 Estadísticas (Promedios)</h2>
-                <button onClick={onClose} className="btn btn-secondary">Cerrar</button>
-            </div>
+            <div style={{
+                background:'#f3f4f6', width:'100%', maxWidth:'1200px', height:'90vh', borderRadius:'12px',
+                display:'flex', flexDirection:'column', overflow:'hidden', boxShadow:'0 25px 50px -12px rgba(0,0,0,0.25)'
+            }}>
+                {/* HEADER PROFESIONAL */}
+                <div style={{
+                    padding:'20px 30px', background: 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)', 
+                    color:'white', display:'flex', justifyContent:'space-between', alignItems:'center',
+                    boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', zIndex: 10
+                }}>
+                    <div style={{display:'flex', alignItems:'center', gap:'15px'}}>
+                        <span style={{fontSize:'2rem'}}>📊</span>
+                        <div>
+                            <h2 style={{margin:0, fontSize:'1.5rem', fontWeight:'800', letterSpacing:'-0.025em'}}>Líderes de la Liga</h2>
+                            <span style={{opacity:0.8, fontSize:'0.85rem'}}>Promedios por Partido • Temporada Regular</span>
+                        </div>
+                    </div>
+                    <button onClick={onClose} className="btn" style={{
+                        background:'rgba(255,255,255,0.1)', color:'white', border:'1px solid rgba(255,255,255,0.2)', 
+                        borderRadius:'50%', width:'36px', height:'36px', cursor:'pointer', fontSize:'1.2rem',
+                        display:'flex', alignItems:'center', justifyContent:'center'
+                    }}>✕</button>
+                </div>
 
-            <div style={{flex:1, overflowY:'auto', padding:'20px'}}>
-                <div style={{maxWidth:'1000px', margin:'0 auto', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(300px, 1fr))', gap:'20px'}}>
-                    <LeaderCard title="🏆 Carrera MVP" data={leaders.mvp} icon="👑" color="#eab308" label="VAL/J" />
-                    <LeaderCard title="🔥 Puntos" data={leaders.puntos} icon="🏀" color="#ef4444" label="PPP" />
-                    <LeaderCard title="🖐️ Rebotes" data={leaders.rebotes} icon="🛡️" color="#10b981" label="RPP" />
-                    <LeaderCard title="🅰️ Asistencias" data={leaders.asistencias} icon="👟" color="#3b82f6" label="APP" />
-                    <LeaderCard title="🎯 Triples" data={leaders.triples} icon="👌" color="#8b5cf6" label="TPP" />
+                <div style={{flex:1, overflowY:'auto', padding:'25px'}}>
+                    {loading ? (
+                        <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100%', color:'#6b7280'}}>
+                            Calculando estadísticas...
+                        </div>
+                    ) : (
+                        <div style={{
+                            display:'grid', 
+                            gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', 
+                            gap:'25px', paddingBottom:'20px'
+                        }}>
+                            {/* COLUMNA MVP (Destacada) */}
+                            <div style={{gridColumn: '1 / -1', maxWidth:'600px', margin:'0 auto', width:'100%'}}>
+                                <LeaderCard title="🏆 Carrera por el MVP" data={leaders.mvp} icon="👑" color="#eab308" label="VAL" />
+                            </div>
+
+                            <LeaderCard title="🔥 Máximos Anotadores" data={leaders.puntos} icon="🏀" color="#ef4444" label="PTS" />
+                            <LeaderCard title="🖐️ Líderes en Rebotes" data={leaders.rebotes} icon="🛡️" color="#10b981" label="REB" />
+                            <LeaderCard title="👟 Líderes en Asistencias" data={leaders.asistencias} icon="🅰️" color="#3b82f6" label="AST" />
+                            <LeaderCard title="🎯 Francotiradores (3PT)" data={leaders.triples} icon="👌" color="#8b5cf6" label="3PM" />
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

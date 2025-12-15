@@ -24,6 +24,7 @@ import LiveGameViewer from './LiveGameViewer';
 import MatchDetailViewer from './MatchDetailViewer';
 import NewsAdmin from './NewsAdmin'; 
 import NewsFeed from './NewsFeed';   
+import AdminEquipos from './AdminEquipos'; // NUEVO COMPONENTE
 
 // Interfaces
 interface Equipo { 
@@ -65,6 +66,7 @@ function App() {
   const [detailMatchId, setDetailMatchId] = useState<string | null>(null);
   const [newsAdminView, setNewsAdminView] = useState(false);
   const [newsFeedView, setNewsFeedView] = useState(false);
+  const [adminEquiposView, setAdminEquiposView] = useState(false); // NUEVO ESTADO
   
   const [dataRefreshKey, setDataRefreshKey] = useState(0); 
   
@@ -77,12 +79,11 @@ function App() {
   const closeAllViews = () => {
     setViewRosterId(null); setMatchView(false); setAdminFormView(false); setUsersView(false); setRegistroView(false);
     setSelectedFormId(null); setCalendarView(false); setMesaTecnicaView(false); setStatsView(false); setStandingsView(false); setSelectForma5MatchId(null);
-    setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false);
+    setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false); setAdminEquiposView(false);
   };
   
   // 1. SISTEMA DE NOTIFICACIONES
   useEffect(() => {
-    // Pedir permiso al cargar la app
     if ('Notification' in window && Notification.permission !== 'granted') {
         Notification.requestPermission();
     }
@@ -91,7 +92,6 @@ function App() {
   const sendNotification = (title: string, body: string, icon = 'https://cdn-icons-png.flaticon.com/512/33/33308.png') => {
       if ('Notification' in window && Notification.permission === 'granted') {
           try {
-            // Utilizamos el tag para que no se muestren notificaciones duplicadas
             new Notification(title, { body, icon, tag: title.replace(/\s/g, '_') });
           } catch (e) {
               console.log("Error enviando notificación push:", e);
@@ -104,15 +104,12 @@ function App() {
       // A) DETECTAR INICIO DE PARTIDOS
       const qMatches = query(collection(db, 'calendario')); 
       const unsubMatches = onSnapshot(qMatches, (snap) => {
-          // Actualizar lista de partidos en vivo para el Dashboard
           const lives = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => m.estatus === 'vivo');
           setLiveMatches(lives);
 
-          // Notificaciones
           if (initialLoadDone.current) {
               snap.docChanges().forEach((change) => {
                   const data = change.doc.data();
-                  // Notificar si el estatus cambia a 'vivo' (cuando se inicia el reloj por primera vez)
                   if (change.type === 'modified' && data.estatus === 'vivo') {
                       sendNotification(
                           "🏀 ¡PARTIDO EN VIVO!", 
@@ -128,7 +125,6 @@ function App() {
       const unsubNews = onSnapshot(qNews, (snap) => {
           if (initialLoadDone.current) {
              snap.docChanges().forEach((change) => {
-                 // Solo si se acaba de agregar una noticia
                  if (change.type === 'added') {
                      const data = change.doc.data();
                      sendNotification("📢 Nueva Noticia", data.titulo || "Información importante de la Liga.");
@@ -137,7 +133,6 @@ function App() {
           }
       });
 
-      // Marcar que la carga inicial terminó después de 2 segundos para no enviar notificaciones viejas
       setTimeout(() => { initialLoadDone.current = true; }, 2000);
 
       return () => { unsubMatches(); unsubNews(); };
@@ -194,15 +189,12 @@ function App() {
   if (loading) return <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100vh'}}>Cargando...</div>;
   if (!user) return <Login />;
   
-  // --- Manejo de rol 'pendiente' ---
   if (user.rol === 'pendiente') {
       return (
         <div className="login-wrapper">
             {registroView ? (
                 <RegistroForma21 
-                    onSuccess={() => {
-                        window.location.reload(); 
-                    }} 
+                    onSuccess={() => { window.location.reload(); }} 
                     onClose={() => setRegistroView(false)} 
                 />
             ) : (
@@ -210,25 +202,15 @@ function App() {
                     <h2>👋 ¡Bienvenido a la Liga!</h2>
                     <p>Has creado tu cuenta correctamente.</p>
                     <p style={{marginBottom:'20px', color:'#666'}}>Para comenzar, debes registrar a tu equipo como Delegado.</p>
-                    
-                    <button 
-                        onClick={() => setRegistroView(true)} 
-                        className="btn btn-primary" 
-                        style={{width:'100%', marginBottom:'10px', padding:'12px', fontSize:'1rem'}}
-                    >
-                        📝 Inscribir mi Equipo
-                    </button>
-                    
-                    <button onClick={()=>signOut(auth)} className="btn btn-secondary" style={{width:'100%'}}>
-                        Cerrar Sesión
-                    </button>
+                    <button onClick={() => setRegistroView(true)} className="btn btn-primary" style={{width:'100%', marginBottom:'10px', padding:'12px', fontSize:'1rem'}}>📝 Inscribir mi Equipo</button>
+                    <button onClick={()=>signOut(auth)} className="btn btn-secondary" style={{width:'100%'}}>Cerrar Sesión</button>
                 </div>
             )}
         </div>
       );
   }
 
-  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView);
+  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView || adminEquiposView);
 
   const DashboardCard = ({ title, icon, color, onClick, variant = 'normal' }: any) => (
     <div onClick={onClick} className="dashboard-card" style={{
@@ -278,6 +260,7 @@ function App() {
         {statsView && <StatsViewer onClose={() => setStatsView(false)} />}
         {standingsView && <StandingsViewer equipos={equipos} onClose={() => setStandingsView(false)} />}
         {newsAdminView && <NewsAdmin onClose={() => setNewsAdminView(false)} />}
+        {adminEquiposView && <AdminEquipos onClose={() => setAdminEquiposView(false)} />}
         {viewRosterId && <RosterViewer forma21Id={viewRosterId} nombreEquipo={formas21.find(f=>f.id===viewRosterId)?.nombreEquipo || 'Equipo'} onClose={() => setViewRosterId(null)} />}
         {matchView && <MatchForm onSuccess={() => {setMatchView(false); refreshData();}} onClose={() => setMatchView(false)} />}
         {adminFormView && <Forma21AdminViewer onClose={() => setAdminFormView(false)} setViewRosterId={setViewRosterId} />}
@@ -301,7 +284,7 @@ function App() {
                     <p style={{margin: 0, opacity: 0.9}}>Bienvenido al panel de control.</p>
                 </div>
 
-                {/* 🔥 ZONA DE PARTIDOS EN VIVO (GAMECAST) - VISIBLE PARA TODOS 🔥 */}
+                {/* 🔥 ZONA DE PARTIDOS EN VIVO (GAMECAST) 🔥 */}
                 {liveMatches.length > 0 && (
                     <div style={{marginBottom:'30px'}}>
                         <h3 style={{color:'#ef4444', marginBottom:'15px', display:'flex', alignItems:'center', gap:'10px', animation:'pulse 2s infinite'}}>
@@ -371,6 +354,7 @@ function App() {
                             <DashboardCard title="Inscripciones" icon="📋" variant="admin" onClick={()=>setAdminFormView(true)} />
                             <DashboardCard title="Mesa Técnica" icon="🏀" variant="admin" onClick={()=>setMesaTecnicaView(true)} />
                             <DashboardCard title="Publicar Info" icon="✍️" variant="admin" onClick={()=>setNewsAdminView(true)} />
+                            <DashboardCard title="Gestionar Logos" icon="🛡️" variant="admin" onClick={()=>setAdminEquiposView(true)} />
                             <DashboardCard title="Usuarios" icon="👥" variant="admin" onClick={()=>setUsersView(true)} />
                             <DashboardCard title="Marcador Manual" icon="🖊️" variant="admin" onClick={()=>setMatchView(true)} />
                         </div>
