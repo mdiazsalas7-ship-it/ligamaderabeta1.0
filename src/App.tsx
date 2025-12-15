@@ -178,7 +178,10 @@ function App() {
             const fSnap = await getDocs(q);
             const formasProcesadas = await Promise.all(fSnap.docs.map(async d => {
                 const jugSnap = await getDocs(collection(db, 'forma21s', d.id, 'jugadores'));
-                return { id: d.id, ...d.data(), rosterCompleto: jugSnap.size >= 10 } as Forma21;
+                
+                // --- CORRECCIÓN CLAVE: LIMITE DE ROSTER A 5 JUGADORES ---
+                return { id: d.id, ...d.data(), rosterCompleto: jugSnap.size >= 5 } as Forma21;
+                // ---------------------------------------------------------
             }));
             setFormas21(formasProcesadas);
         } catch(e) { console.error("Error:", e); }

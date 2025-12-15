@@ -1,20 +1,22 @@
 import React, { useState } from 'react';
 import { db, auth } from './firebase'; 
-import { collection, addDoc, doc, updateDoc, setDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc, setDoc, query, where, getDocs } from 'firebase/firestore';
+import LogoUploader from './LogoUploader'; // <--- IMPORTANTE: Importamos el componente
 
 const RegistroForma21: React.FC<{ onSuccess: () => void, onClose: () => void }> = ({ onSuccess, onClose }) => {
     const user = auth.currentUser;
     const [nombreEquipo, setNombreEquipo] = useState('');
-    const [logoUrl, setLogoUrl] = useState(''); // Estado para el Logo
+    const [logoUrl, setLogoUrl] = useState(''); // Aquí se guardará la URL que nos devuelva el LogoUploader
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
-    // URL de un escudo genérico por si no ponen nada
     const DEFAULT_LOGO = "https://cdn-icons-png.flaticon.com/512/166/166344.png"; 
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         
+        if (loading) return; // Bloqueo anti doble click
+
         if (!user) {
             setError("No hay sesión activa. Recarga la página.");
             return;
@@ -30,46 +32,55 @@ const RegistroForma21: React.FC<{ onSuccess: () => void, onClose: () => void }> 
 
         try {
             const userId = user.uid;
+            const nombreLimpio = nombreEquipo.trim();
             
-            // Usamos la URL ingresada o el defecto si está vacía
-            const finalLogoUrl = logoUrl.trim() || DEFAULT_LOGO;
+            // 1. VALIDACIÓN ANTI-DUPLICADOS
+            const qDuplicado = query(collection(db, 'equipos'), where('nombre', '==', nombreLimpio));
+            const snapDuplicado = await getDocs(qDuplicado);
 
-            // 1. Crear Forma 21
+            if (!snapDuplicado.empty) {
+                throw new Error("⚠️ Ya existe un equipo registrado con ese nombre. Por favor elige otro.");
+            }
+
+            // Usamos la URL que vino del Uploader o el default
+            const finalLogoUrl = logoUrl || DEFAULT_LOGO;
+
+            // 2. Crear Forma 21
             const forma21Ref = collection(db, 'forma21s');
             const newForma21 = await addDoc(forma21Ref, {
                 delegadoId: userId,
                 delegadoEmail: user.email,
-                nombreEquipo: nombreEquipo.trim(),
-                logoUrl: finalLogoUrl, // Guardamos el logo
+                nombreEquipo: nombreLimpio,
+                logoUrl: finalLogoUrl,
                 fechaRegistro: new Date(),
                 estatus: 'pendiente', 
                 aprobado: false,
                 rosterCerrado: false 
             });
 
-            // 2. Crear Equipo Oficial (pendiente)
+            // 3. Crear Equipo Oficial con el MISMO ID
             const equipoRef = doc(db, 'equipos', newForma21.id);
             await setDoc(equipoRef, {
-                nombre: nombreEquipo.trim(),
+                nombre: nombreLimpio,
                 forma21Id: newForma21.id,
-                logoUrl: finalLogoUrl, // Guardamos el logo aquí también
+                logoUrl: finalLogoUrl,
                 estatus: 'pendiente',
                 victorias: 0, derrotas: 0, puntos: 0, puntos_favor: 0, puntos_contra: 0,
             });
 
-            // 3. Actualizar Usuario al final
+            // 4. Actualizar Usuario
             const userRef = doc(db, 'usuarios', userId);
             await updateDoc(userRef, {
                 equipoId: newForma21.id,
                 rol: 'delegado' 
             });
 
-            alert(`✅ ¡Equipo ${nombreEquipo} registrado con éxito!`);
+            alert(`✅ ¡Equipo ${nombreLimpio} registrado con éxito!`);
             onSuccess(); 
 
-        } catch (err) {
+        } catch (err: any) {
             console.error(err);
-            setError('Error al registrar. Intenta de nuevo.');
+            setError(err.message || 'Error al registrar. Intenta de nuevo.');
         } finally {
             setLoading(false);
         }
@@ -80,22 +91,17 @@ const RegistroForma21: React.FC<{ onSuccess: () => void, onClose: () => void }> 
             <h2 style={{color:'var(--primary)', borderBottom:'2px solid #eee', paddingBottom:'10px', marginTop:0}}>📝 Inscripción de Nuevo Equipo</h2>
             <p style={{color:'#6b7280', fontSize:'0.9rem'}}>Completa los datos para registrarte como delegado.</p>
 
-            <form onSubmit={handleSubmit} style={{display:'flex', flexDirection:'column', gap:'15px'}}>
+            <form onSubmit={handleSubmit} style={{display:'flex', flexDirection:'column', gap:'20px'}}>
                 
-                {/* VISTA PREVIA DEL LOGO */}
-                <div style={{display:'flex', justifyContent:'center', marginBottom:'10px'}}>
-                    <div style={{
-                        width:'100px', height:'100px', borderRadius:'50%', 
-                        border:'4px solid #e5e7eb', overflow:'hidden', 
-                        background:'#f9fafb', display:'flex', alignItems:'center', justifyContent:'center'
-                    }}>
-                        <img 
-                            src={logoUrl || DEFAULT_LOGO} 
-                            alt="Logo Preview" 
-                            style={{width:'100%', height:'100%', objectFit:'cover'}}
-                            onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_LOGO; }} // Si falla el link, pone el default
-                        />
-                    </div>
+                {/* CAMBIO: Usamos LogoUploader en lugar del input de texto y la imagen estática */}
+                <div style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
+                    <label style={{fontWeight:'bold', marginBottom:'10px'}}>Logo del Equipo:</label>
+                    <LogoUploader 
+                        onUploadSuccess={(url) => setLogoUrl(url)} 
+                    />
+                    <small style={{color:'#6b7280', fontSize:'0.75rem', marginTop:'5px'}}>
+                        Toca la cámara para subir una imagen de tu galería
+                    </small>
                 </div>
 
                 <div>
@@ -115,30 +121,13 @@ const RegistroForma21: React.FC<{ onSuccess: () => void, onClose: () => void }> 
                         style={{width:'100%', padding:'10px', border:'1px solid #ccc', borderRadius:'6px'}}
                     />
                 </div>
-
-                <div>
-                    <label htmlFor="logoUrl" style={{display:'block', fontWeight:'bold', marginBottom:'5px'}}>
-                        Logo del Equipo (Link de Imagen):
-                    </label>
-                    <input 
-                        id="logoUrl"
-                        type="text"
-                        value={logoUrl}
-                        onChange={(e) => setLogoUrl(e.target.value)}
-                        placeholder="Pega aquí el link (https://...)"
-                        style={{width:'100%', padding:'10px', border:'1px solid #ccc', borderRadius:'6px'}}
-                    />
-                    <small style={{color:'#6b7280', fontSize:'0.75rem'}}>
-                        * Puedes copiar el link de una imagen de Google, Instagram o Facebook. Si lo dejas vacío, se usará uno genérico.
-                    </small>
-                </div>
                 
-                {error && <p style={{color:'red', fontSize:'0.8rem', margin:'0'}}>{error}</p>}
+                {error && <p style={{color:'red', fontSize:'0.85rem', margin:'0', padding:'10px', background:'#fee2e2', borderRadius:'4px', fontWeight:'bold'}}>{error}</p>}
 
                 <div style={{display:'flex', gap:'10px', marginTop:'15px'}}>
                     <button type="button" onClick={onClose} className="btn btn-secondary" style={{flex:1}}>Cancelar</button>
                     <button type="submit" disabled={loading} className="btn btn-primary" style={{flex:1}}>
-                        {loading ? 'Registrar Equipo' : 'Registrar Equipo'}
+                        {loading ? 'Procesando...' : 'Registrar Equipo'}
                     </button>
                 </div>
             </form>
