@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
-import LogoUploader from './LogoUploader'; // <--- IMPORTANTE: Importamos el componente
+import LogoUploader from './LogoUploader'; 
+import PlayoffBracket from './PlayoffBracket'; // NUEVA IMPORTACIÓN
 
 interface Forma21 { 
     id: string; 
@@ -42,7 +43,8 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
     
     const [matches, setMatches] = useState<Match[]>([]);
     const [loadingMatches, setLoadingMatches] = useState(false);
-    const [editingLogo, setEditingLogo] = useState(false); // Estado para mostrar el uploader
+    const [editingLogo, setEditingLogo] = useState(false);
+    const [showBracket, setShowBracket] = useState(false); // NUEVO ESTADO PARA EL BRACKET
     
     const DEFAULT_LOGO = "https://cdn-icons-png.flaticon.com/512/166/166344.png";
 
@@ -69,17 +71,12 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
         fetchMyMatches();
     }, [userEquipoId]);
 
-    // ESTA FUNCIÓN SE LLAMA AUTOMÁTICAMENTE CUANDO TERMINA LA CARGA DEL LOGO
     const handleLogoUploaded = async (newUrl: string, formaId: string) => {
         try {
-            // Actualizamos en ambas colecciones para consistencia
             await updateDoc(doc(db, 'forma21s', formaId), { logoUrl: newUrl });
-            
-            // Intentamos actualizar en equipos también (si existe con el mismo ID)
             try {
                  await updateDoc(doc(db, 'equipos', formaId), { logoUrl: newUrl });
             } catch (e) {
-                // Si falla equipos (raro, pero posible si IDs difieren), no bloqueamos
                 console.warn("No se pudo actualizar logo en colección equipos", e);
             }
             
@@ -108,6 +105,9 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
 
     return (
         <div className="animate-fade-in">
+            {/* RENDERIZAR BRACKET DE PLAYOFFS SI ESTÁ ACTIVO */}
+            {showBracket && <PlayoffBracket adminMode={false} onClose={() => setShowBracket(false)} />}
+
             <div className="dashboard-grid" style={{marginBottom:'30px', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(300px, 1fr))', gap:'20px'}}>
                 
                 {/* TARJETA IDENTIDAD Y LOGO */}
@@ -116,7 +116,6 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
                     background:'white', padding:'20px', borderRadius:'12px', boxShadow:'0 2px 5px rgba(0,0,0,0.05)'
                 }}>
                     <div style={{display:'flex', alignItems:'center', gap:'15px', marginBottom:'15px'}}>
-                        {/* AQUI MOSTRAMOS EL LOGO O EL UPLOADER */}
                         {editingLogo ? (
                             <div style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center'}}>
                                 <h4 style={{margin:'0 0 10px 0', fontSize:'0.9rem'}}>Cambiar Logo</h4>
@@ -178,6 +177,15 @@ const DelegadoDashboard: React.FC<DelegadoDashboardProps> = ({
                         {canEditRoster ? 'Modificar jugadores' : 'Solo Admin puede editar'}
                     </div>
                 </div>
+
+                {/* NUEVO BOTÓN: VER PLAYOFFS */}
+                {isApproved && (
+                    <div className="dashboard-card" onClick={() => setShowBracket(true)} style={{cursor:'pointer', borderLeft:'4px solid #7c3aed', background:'white', padding:'20px', borderRadius:'12px', boxShadow:'0 2px 5px rgba(0,0,0,0.05)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center'}}>
+                        <div style={{fontSize:'2.5rem', marginBottom:'5px'}}>🏆</div>
+                        <div style={{fontWeight:'bold'}}>Ver Playoffs</div>
+                        <div style={{fontSize:'0.7rem', color:'#666'}}>Cuadro Final</div>
+                    </div>
+                )}
             </div>
 
             {/* PARTIDOS */}

@@ -24,7 +24,8 @@ import LiveGameViewer from './LiveGameViewer';
 import MatchDetailViewer from './MatchDetailViewer';
 import NewsAdmin from './NewsAdmin'; 
 import NewsFeed from './NewsFeed';   
-import AdminEquipos from './AdminEquipos'; // NUEVO COMPONENTE
+import AdminEquipos from './AdminEquipos';
+import PlayoffBracket from './PlayoffBracket'; // NUEVO COMPONENTE
 
 // Interfaces
 interface Equipo { 
@@ -66,7 +67,8 @@ function App() {
   const [detailMatchId, setDetailMatchId] = useState<string | null>(null);
   const [newsAdminView, setNewsAdminView] = useState(false);
   const [newsFeedView, setNewsFeedView] = useState(false);
-  const [adminEquiposView, setAdminEquiposView] = useState(false); // NUEVO ESTADO
+  const [adminEquiposView, setAdminEquiposView] = useState(false);
+  const [showBracket, setShowBracket] = useState(false); // NUEVO ESTADO PLAYOFFS
   
   const [dataRefreshKey, setDataRefreshKey] = useState(0); 
   
@@ -79,7 +81,7 @@ function App() {
   const closeAllViews = () => {
     setViewRosterId(null); setMatchView(false); setAdminFormView(false); setUsersView(false); setRegistroView(false);
     setSelectedFormId(null); setCalendarView(false); setMesaTecnicaView(false); setStatsView(false); setStandingsView(false); setSelectForma5MatchId(null);
-    setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false); setAdminEquiposView(false);
+    setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false);
   };
   
   // 1. SISTEMA DE NOTIFICACIONES
@@ -178,10 +180,7 @@ function App() {
             const fSnap = await getDocs(q);
             const formasProcesadas = await Promise.all(fSnap.docs.map(async d => {
                 const jugSnap = await getDocs(collection(db, 'forma21s', d.id, 'jugadores'));
-                
-                // --- CORRECCIÓN CLAVE: LIMITE DE ROSTER A 5 JUGADORES ---
                 return { id: d.id, ...d.data(), rosterCompleto: jugSnap.size >= 5 } as Forma21;
-                // ---------------------------------------------------------
             }));
             setFormas21(formasProcesadas);
         } catch(e) { console.error("Error:", e); }
@@ -213,7 +212,7 @@ function App() {
       );
   }
 
-  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView || adminEquiposView);
+  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView || adminEquiposView || showBracket);
 
   const DashboardCard = ({ title, icon, color, onClick, variant = 'normal' }: any) => (
     <div onClick={onClick} className="dashboard-card" style={{
@@ -272,6 +271,9 @@ function App() {
         {selectedFormId && <RosterForm forma21Id={selectedFormId} nombreEquipo={formas21.find(f=>f.id===selectedFormId)?.nombreEquipo || 'Equipo'} onSuccess={() => {setSelectedFormId(null); refreshData();}} onClose={() => setSelectedFormId(null)} />}
         {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || ''} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
         {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={refreshData} />}
+        
+        {/* COMPONENTE DE PLAYOFFS */}
+        {showBracket && <PlayoffBracket adminMode={user.rol === 'admin'} onClose={() => setShowBracket(false)} />}
 
         {/* DASHBOARD PRINCIPAL */}
         {isDashboard && (
@@ -334,6 +336,8 @@ function App() {
                     <DashboardCard title="Calendario" icon="📅" color="#3b82f6" onClick={()=>setCalendarView(true)} />
                     <DashboardCard title="Tabla General" icon="🏆" color="#eab308" onClick={()=>setStandingsView(true)} />
                     <DashboardCard title="Líderes" icon="📊" color="#10b981" onClick={()=>setStatsView(true)} />
+                    {/* BOTÓN PLAYOFFS PARA TODOS */}
+                    <DashboardCard title="Fase Final" icon="⚔️" color="#7c3aed" onClick={()=>setShowBracket(true)} />
                 </div>
 
                 {/* MENÚS ESPECÍFICOS POR ROL */}
@@ -360,6 +364,8 @@ function App() {
                             <DashboardCard title="Gestionar Logos" icon="🛡️" variant="admin" onClick={()=>setAdminEquiposView(true)} />
                             <DashboardCard title="Usuarios" icon="👥" variant="admin" onClick={()=>setUsersView(true)} />
                             <DashboardCard title="Marcador Manual" icon="🖊️" variant="admin" onClick={()=>setMatchView(true)} />
+                            {/* BOTÓN PLAYOFFS ADMIN */}
+                            <DashboardCard title="Gestionar Playoffs" icon="⚙️" variant="admin" onClick={()=>setShowBracket(true)} />
                         </div>
                     </div>
                 )}

@@ -1,11 +1,10 @@
-// src/JugadorDashboard.tsx (Corrección de importación de DocumentData)
-
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 // CLAVE: SOLO se importan los valores/métodos necesarios
 import { collection, getDocs, query, where } from 'firebase/firestore'; 
 // CLAVE: El tipo DocumentData se importa por separado
 import type { DocumentData } from 'firebase/firestore'; 
+import PlayoffBracket from './PlayoffBracket'; // 1. IMPORTAR COMPONENTE
 
 interface Forma21 extends DocumentData {
     id: string;
@@ -41,6 +40,7 @@ const JugadorDashboard: React.FC<JugadorDashboardProps> = ({
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [misPartidos, setMisPartidos] = useState<Partido[]>([]);
+    const [showBracket, setShowBracket] = useState(false); // 2. ESTADO PARA PLAYOFFS
     
     // 9B: Encontrar la Forma 21 del jugador
     const miForma = formas21.find(f => f.id === userEquipoId);
@@ -92,14 +92,32 @@ const JugadorDashboard: React.FC<JugadorDashboardProps> = ({
     return (
         <div style={{ maxWidth: '800px', margin: '0 auto', textAlign: 'left' }}>
             
-            <h3 style={{ borderBottom: '2px solid #007bff', paddingBottom: '10px' }}>
-                ⭐ Mi Equipo: {miForma?.nombreEquipo || 'Cargando...'}
-            </h3>
+            {/* 3. MODAL DE PLAYOFFS */}
+            {showBracket && <PlayoffBracket adminMode={false} onClose={() => setShowBracket(false)} />}
+
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom: '2px solid #007bff', paddingBottom: '10px', marginBottom:'20px'}}>
+                <h3 style={{margin:0}}>
+                    ⭐ Mi Equipo: {miForma?.nombreEquipo || 'Cargando...'}
+                </h3>
+                {/* 4. BOTÓN PARA ABRIR PLAYOFFS */}
+                <button 
+                    onClick={() => setShowBracket(true)}
+                    className="btn"
+                    style={{
+                        background: 'linear-gradient(45deg, #7c3aed, #6d28d9)',
+                        color: 'white', border: 'none', borderRadius: '5px',
+                        padding: '8px 15px', fontWeight: 'bold', cursor: 'pointer', fontSize:'0.9rem',
+                        display:'flex', alignItems:'center', gap:'5px'
+                    }}
+                >
+                    🏆 Ver Playoffs
+                </button>
+            </div>
 
             {/* Roster del Equipo */}
             <div className="data-block-container" style={{ marginBottom: '30px' }}>
                 <div className="data-block-header">Roster y Jugadores</div>
-                <p>Eres el jugador: **{userName}**</p>
+                <p>Eres el jugador: <strong>{userName}</strong></p>
                 
                 {miForma && (
                     <button 
@@ -124,7 +142,7 @@ const JugadorDashboard: React.FC<JugadorDashboardProps> = ({
                                 <th>Jornada</th>
                                 <th>Oponente</th>
                                 <th>Resultado</th>
-                                <th>Victoria/Derrota</th>
+                                <th>Estado</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -133,15 +151,31 @@ const JugadorDashboard: React.FC<JugadorDashboardProps> = ({
                                 const miMarcador = esLocal ? p.marcadorLocal : p.marcadorVisitante;
                                 const opMarcador = esLocal ? p.marcadorVisitante : p.marcadorLocal;
                                 const oponenteNombre = esLocal ? p.equipoVisitanteNombre : p.equipoLocalNombre;
-                                const resultado = miMarcador > opMarcador ? 'VICTORIA' : 'DERROTA';
-                                const color = miMarcador > opMarcador ? 'darkgreen' : 'red';
+                                
+                                let resultadoTexto = 'EMPATE';
+                                let color = 'gray';
+                                
+                                if (miMarcador > opMarcador) {
+                                    resultadoTexto = 'VICTORIA';
+                                    color = '#10b981'; // Verde
+                                } else if (miMarcador < opMarcador) {
+                                    resultadoTexto = 'DERROTA';
+                                    color = '#ef4444'; // Rojo
+                                }
 
                                 return (
                                     <tr key={p.id}>
                                         <td>{p.jornada}</td>
                                         <td>vs {oponenteNombre}</td>
-                                        <td>{miMarcador} - {opMarcador}</td>
-                                        <td><span style={{ color: color, fontWeight: 'bold' }}>{resultado}</span></td>
+                                        <td style={{fontWeight:'bold'}}>{miMarcador} - {opMarcador}</td>
+                                        <td>
+                                            <span style={{ 
+                                                backgroundColor: color, color: 'white', 
+                                                padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold'
+                                            }}>
+                                                {resultadoTexto}
+                                            </span>
+                                        </td>
                                     </tr>
                                 );
                             })}
