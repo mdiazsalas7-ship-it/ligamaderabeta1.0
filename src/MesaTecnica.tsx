@@ -1,18 +1,24 @@
-import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
+import React, { useState, useEffect, memo, useCallback } from 'react';
 import { db } from './firebase';
-import { doc, updateDoc, onSnapshot, collection, query, getDocs, setDoc, increment, deleteDoc, where } from 'firebase/firestore';
-
-// --- URL DEL SONIDO DE LA CHICHARRA ---
-const BUZZER_SOUND_URL = "https://www.myinstants.com/media/sounds/nba-buzzer.mp3";
+import { doc, updateDoc, onSnapshot, collection, query, getDocs, setDoc, increment, deleteDoc, where, addDoc, serverTimestamp } from 'firebase/firestore';
 
 // --- INTERFACES ---
 interface Player { id: string; nombre: string; numero: number; equipoId: string; }
 interface Staff { entrenador: string; asistente: string; expulsado?: boolean; faltasTecnicas?: number; }
+
+// Modificamos GameEvent para guardar DATOS para poder borrarlos luego
 interface GameEvent { 
-    id: string; text: string; time: string; 
+    id: string; 
+    text: string; 
+    time: string; 
     team: 'local'|'visitante'|'system'; 
     type: 'score'|'stat'|'foul'|'sub'|'period'|'timeout'|'system'; 
+    // Campos para reversión (Importantes para el botón X)
+    playerId?: string;
+    action?: string;
+    val?: number;
 }
+
 interface PlayerGameStats {
     puntos: number; faltasPersonales: number; faltasTecnicas: number;
     faltasAntideportivas: number; faltasDescalificantes: number; 
@@ -28,83 +34,24 @@ interface MatchData {
     forma5?: any;
     staffLocal?: Staff; staffVisitante?: Staff;
     faltasLocal: number; faltasVisitante: number;
-    timeoutsLocal: number; timeoutsVisitante: number;
+    tiemposLocal: number; tiemposVisitante: number;
     gameLog?: GameEvent[];
 }
 
-// --- 1. RELOJ CENTRAL ---
-const ClockDisplay = memo(({ 
-    timeLeft, shotClock, isRunning, periodo, onToggle, onNextQuarter, onAdjust, onResetShot 
-}: { 
-    timeLeft: number, shotClock: number, isRunning: boolean, periodo: number,
-    onToggle: () => void, onNextQuarter: () => void, onAdjust: (type: 'min'|'sec', v: number) => void,
-    onResetShot: (val: 24 | 14) => void
-}) => {
-    
-    const formatTime = (tenths: number) => {
-        const totalSeconds = Math.floor(tenths / 10);
-        const mins = Math.floor(totalSeconds / 60);
-        const secs = totalSeconds % 60;
-        const dec = tenths % 10;
-        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${dec}`;
-    };
-
-    const formatShotClock = (tenths: number) => {
-        if (timeLeft < tenths) return ""; 
-        const secs = Math.ceil(tenths / 10);
-        return secs.toString();
-    };
-
+// --- 1. VISUALIZADOR DE PERIODO (SIN RELOJ) ---
+const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: number, estatus: string, onNextQuarter: () => void }) => {
     const getPeriodoLabel = (p: number) => p <= 4 ? `CUARTO ${p}` : `PRÓRROGA ${p - 4}`;
-    const isCrunchTime = periodo >= 4 && timeLeft <= 1200;
 
     return (
-        <div style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center'}}>
-            <div style={{color:'#fbbf24', fontWeight:'bold', marginBottom:'5px', textShadow:'2px 2px 4px #000'}}>
+        <div style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center'}}>
+            <div style={{color:'#fbbf24', fontWeight:'bold', fontSize:'1.5rem', marginBottom:'10px', textShadow:'2px 2px 4px #000'}}>
                 {getPeriodoLabel(periodo)}
             </div>
             
-            <div style={{display:'flex', alignItems:'center', gap:'15px', marginBottom:'10px'}}>
-                {/* RELOJ PRINCIPAL */}
-                <div style={{
-                    fontSize:'3rem', fontFamily:'monospace', fontWeight:'bold', 
-                    color: isRunning ? '#10b981' : (isCrunchTime ? '#ef4444' : '#ef4444'), lineHeight:1,
-                    background:'rgba(17, 17, 17, 0.8)', padding:'5px 20px', borderRadius:'6px', border: isCrunchTime ? '2px solid #ef4444' : '1px solid #333',
-                    minWidth:'220px', textAlign:'center'
-                }}>
-                    {formatTime(timeLeft)}
-                </div>
-
-                {/* RELOJ DE TIRO (24s) */}
-                <div style={{display:'flex', flexDirection:'column', alignItems:'center', background:'#222', padding:'5px', borderRadius:'6px', border:'1px solid #444'}}>
-                    <div style={{fontSize:'0.6rem', color:'#888', marginBottom:'2px'}}>POSESIÓN</div>
-                    <div style={{
-                        fontSize:'2rem', fontWeight:'bold', color: shotClock <= 50 ? 'red' : '#fbbf24', 
-                        fontFamily:'monospace', lineHeight:1, minWidth:'50px', textAlign:'center'
-                    }}>
-                        {formatShotClock(shotClock) || '-'}
-                    </div>
-                    {/* Botones Manuales */}
-                    <div style={{display:'flex', gap:'3px', marginTop:'5px'}}>
-                        <button onClick={() => onResetShot(24)} style={{background:'#2563eb', color:'white', border:'none', borderRadius:'3px', fontSize:'0.7rem', fontWeight:'bold', cursor:'pointer', padding:'2px 5px'}}>24</button>
-                        <button onClick={() => onResetShot(14)} style={{background:'#d97706', color:'white', border:'none', borderRadius:'3px', fontSize:'0.7rem', fontWeight:'bold', cursor:'pointer', padding:'2px 5px'}}>14</button>
-                    </div>
-                </div>
-            </div>
-
-            {isCrunchTime && <div style={{fontSize:'0.7rem', color:'#ef4444', fontWeight:'bold', marginBottom:'5px', animation:'pulse 1s infinite'}}>⚠️ FIBA: RELOJ SE DETIENE AL ANOTAR</div>}
-            
-            <div style={{display:'flex', gap:'2px', marginBottom:'5px'}}>
-                <button className="clock-btn" onClick={()=>onAdjust('min', 1)}>+1m</button>
-                <button className="clock-btn" onClick={()=>onAdjust('min', -1)}>-1m</button>
-                <button className="clock-btn" onClick={()=>onAdjust('sec', 1)}>+1s</button>
-                <button className="clock-btn" onClick={()=>onAdjust('sec', -1)}>-1s</button>
-            </div>
             <div style={{display:'flex', gap:'5px'}}>
-                <button onClick={onToggle} className="btn" style={{background: isRunning ? '#ef4444' : '#10b981', color:'white', width:'80px', fontWeight:'bold', padding:'4px', fontSize:'0.8rem'}}>
-                    {isRunning ? 'PAUSAR' : 'INICIAR'}
+                <button onClick={onNextQuarter} className="btn" style={{background: estatus === 'programado' ? '#10b981' : '#f59e0b', color:'black', fontWeight:'bold', padding:'10px 20px', fontSize:'1rem', border:'none', borderRadius:'6px', cursor:'pointer'}}>
+                    {estatus === 'programado' ? 'INICIAR JUEGO' : (periodo >= 4 ? 'FINALIZAR PARTIDO' : 'SIGUIENTE PERIODO >>')}
                 </button>
-                <button onClick={onNextQuarter} className="btn" style={{background:'#f59e0b', color:'black', fontWeight:'bold', padding:'4px', fontSize:'0.8rem'}}>SIG. PERIODO</button>
             </div>
         </div>
     );
@@ -112,9 +59,13 @@ const ClockDisplay = memo(({
 
 // --- 2. FILA DE JUGADOR ---
 const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCaptain }: any) => {
-    const isExpulsado = stats?.expulsado;
-    const faltas = stats?.faltasTotales || 0;
-    const isClickable = !isExpulsado || isSubTarget;
+    // Protección contra undefined para evitar pantalla blanca
+    const safeStats = stats || { faltasTotales: 0, expulsado: false };
+    const isExpulsado = safeStats.expulsado;
+    const faltas = safeStats.faltasTotales;
+    
+    // Si está expulsado, bloqueamos clics salvo para sustitución
+    const isBlocked = isExpulsado && !isSubTarget;
 
     return (
         <div style={{
@@ -122,8 +73,8 @@ const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCap
             background: isSubTarget ? '#ef4444' : '#202020',
             border: isSubTarget ? '2px dashed white' : '1px solid #333',
             display:'flex', flexDirection:'column', gap:'2px',
-            opacity: isExpulsado && !isSubTarget ? 0.5 : 1,
-            pointerEvents: isClickable ? 'auto' : 'none',
+            opacity: isBlocked ? 0.5 : 1,
+            pointerEvents: isBlocked ? 'none' : 'auto',
             boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
         }} onClick={() => isSubTarget && onSub(player)}>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
@@ -142,47 +93,46 @@ const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCap
             </div>
             {!isSubTarget && !isExpulsado && (
                 <div style={{display:'flex', gap:'2px', justifyContent:'space-between', marginTop:'2px'}}>
-                    {/* PUNTOS (Resetean 24) */}
+                    {/* PUNTOS */}
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 1)}} className="btn-stat" style={{background:'#1d4ed8'}}>+1</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 2)}} className="btn-stat" style={{background:'#1d4ed8'}}>+2</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 3)}} className="btn-stat" style={{background:'#1d4ed8'}}>+3</button>
                     
-                    {/* REBOTES INTELIGENTES */}
-                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'rebote_def', 1)}} className="btn-stat" style={{background:'#059669', fontSize:'0.65rem'}} title="Rebote Defensivo (24s)">RD</button>
-                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'rebote_of', 1)}} className="btn-stat" style={{background:'#d97706', fontSize:'0.65rem'}} title="Rebote Ofensivo (14s)">RO</button>
-                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'asistencias', 1)}} className="btn-stat" style={{background:'#7c3aed', fontSize:'0.65rem'}}>A</button>
+                    {/* REBOTE UNIFICADO */}
+                    <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'rebote', 1)}} className="btn-stat" style={{background:'#059669', fontSize:'0.65rem', flex: 2}} title="Rebote">REB</button>
                     
-                    {/* FALTAS (Chequean 14s) */}
+                    {/* FALTAS */}
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_P', 0)}} className="btn-stat" style={{background:'#dc2626', color:'white'}}>P</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_T', 0)}} className="btn-stat" style={{background:'#be123c', color:'white'}}>T</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_U', 0)}} className="btn-stat" style={{background:'#991b1b', color:'white'}}>U</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_D', 0)}} className="btn-stat" style={{background:'black', color:'red', border:'1px solid red'}}>D</button>
                 </div>
             )}
-            {isExpulsado && !isSubTarget && <div style={{fontSize:'0.7rem', color:'#ef4444', textAlign:'center'}}>JUGADOR EXPULSADO</div>}
-            {isSubTarget && <div style={{textAlign:'center', color:'white', fontWeight:'bold', fontSize:'0.8rem', padding:'2px'}}>CLICK PARA SACAR ⬆️</div>}
+            {isSubTarget && <div style={{textAlign:'center', color:'white', fontWeight:'bold', fontSize:'0.8rem', padding:'2px'}}>CLICK PARA CONFIRMAR SALIDA ⬆️</div>}
         </div>
     );
 });
 
-// --- 3. FILA DE STAFF ---
+// --- 3. FILA DE STAFF (DT) ---
 const StaffRow = memo(({ staff, team, onAction }: any) => {
-    const entrenador = staff?.entrenador || 'Sin DT';
-    const asistente = staff?.asistente || '';
-    const isExpulsado = staff?.expulsado;
+    // Si no hay staff o nombre, mostrar placeholder seguro
+    const s = staff || {};
+    const entrenadorNombre = s.entrenador || 'Sin DT Asignado';
+    const asistenteNombre = s.asistente || '';
+    const isExpulsado = s.expulsado;
 
     return (
-        <div style={{marginTop:'10px', padding:'6px', borderRadius:'4px', background: '#2d3748', border: '1px solid #4a5568', opacity: isExpulsado ? 0.6 : 1}}>
-            <div style={{color:'#a0aec0', fontSize:'0.7rem', fontWeight:'bold', marginBottom:'2px'}}>CUERPO TÉCNICO</div>
+        <div style={{marginTop:'15px', marginBottom:'10px', padding:'8px', borderRadius:'4px', background: '#2d3748', border: '1px solid #4a5568', opacity: isExpulsado ? 0.6 : 1}}>
+            <div style={{color:'#a0aec0', fontSize:'0.75rem', fontWeight:'bold', marginBottom:'4px', textTransform:'uppercase', borderBottom:'1px solid #4a5568', paddingBottom:'2px'}}>CUERPO TÉCNICO</div>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
                 <div>
-                    <div style={{fontWeight:'bold', fontSize:'0.85rem', color:'white'}}>DT: {entrenador}</div>
-                    {asistente && <div style={{fontSize:'0.75rem', color:'#cbd5e0'}}>AT: {asistente}</div>}
+                    <div style={{fontWeight:'bold', fontSize:'0.9rem', color:'white'}}>DT: {entrenadorNombre}</div>
+                    {asistenteNombre && <div style={{fontSize:'0.75rem', color:'#cbd5e0'}}>AT: {asistenteNombre}</div>}
                 </div>
                 {!isExpulsado ? (
                     <div style={{display:'flex', gap:'5px'}}>
-                        <button onClick={()=>onAction('falta_T')} className="btn-stat" style={{background:'#be123c', color:'white', padding:'2px 8px'}}>T</button>
-                        <button onClick={()=>onAction('falta_D')} className="btn-stat" style={{background:'black', color:'red', border:'1px solid red', padding:'2px 8px'}}>D</button>
+                        <button onClick={()=>onAction('falta_T')} className="btn-stat" style={{background:'#be123c', color:'white', padding:'4px 10px', fontSize:'0.75rem'}}>T</button>
+                        <button onClick={()=>onAction('falta_D')} className="btn-stat" style={{background:'black', color:'red', border:'1px solid red', padding:'4px 10px', fontSize:'0.75rem'}}>D</button>
                     </div>
                 ) : <span style={{color:'red', fontWeight:'bold', fontSize:'0.8rem'}}>EXPULSADO</span>}
             </div>
@@ -194,129 +144,31 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const [matches, setMatches] = useState<any[]>([]);
     const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
     const [matchData, setMatchData] = useState<MatchData | null>(null);
+    
     const [localOnCourt, setLocalOnCourt] = useState<Player[]>([]);
     const [localBench, setLocalBench] = useState<Player[]>([]);
     const [visitanteOnCourt, setVisitanteOnCourt] = useState<Player[]>([]);
     const [visitanteBench, setVisitanteBench] = useState<Player[]>([]);
     const [captains, setCaptains] = useState<{local: string|null, visitante: string|null}>({ local: null, visitante: null });
     const [statsCache, setStatsCache] = useState<Record<string, PlayerGameStats>>({});
+    
+    // Estado local para Staff (Cache)
     const [staffCache, setStaffCache] = useState<{local: Staff, visitante: Staff}>({ local: {entrenador:'', asistente:''}, visitante: {entrenador:'', asistente:''} });
-
-    const [timeLeft, setTimeLeft] = useState(6000); 
-    const [shotClock, setShotClock] = useState(240); // 24.0s
-    
-    const [isRunning, setIsRunning] = useState(false);
-    const timeLeftRef = useRef(6000);
-    const shotClockRef = useRef(240); 
-    
-    const timerRef = useRef<any>(null);
-    const buzzerRef = useRef<HTMLAudioElement | null>(null); // REF PARA EL AUDIO
 
     const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
     const [benchModalOpen, setBenchModalOpen] = useState<'local' | 'visitante' | null>(null);
 
-    // INICIALIZAR AUDIO (Solo una vez)
-    useEffect(() => {
-        buzzerRef.current = new Audio(BUZZER_SOUND_URL);
-        buzzerRef.current.volume = 1.0; // Volumen máximo
-    }, []);
-
-    // FUNCIÓN PARA REPRODUCIR SONIDO
-    const playBuzzer = () => {
-        if (buzzerRef.current) {
-            buzzerRef.current.currentTime = 0; // Rebobinar si ya se estaba reproduciendo
-            buzzerRef.current.play().catch((e) => console.log("Audio play blocked by browser policy until interaction.", e));
-        }
-    };
-
     // 1. CARGAR PARTIDOS
     useEffect(() => {
         const fetchMatches = async () => {
-            const q = query(collection(db, 'calendario')); 
+            const q = query(collection(db, 'calendario'), where('estatus', 'in', ['programado', 'vivo']));
             const snap = await getDocs(q);
-            setMatches(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((m:any) => m.estatus === 'programado' || m.estatus === 'vivo'));
+            setMatches(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         };
         if (!selectedMatchId) fetchMatches();
     }, [selectedMatchId]);
 
-    // 2. RELOJ UNIFICADO
-    useEffect(() => {
-        if (isRunning) {
-            timerRef.current = setInterval(() => {
-                // A) Reloj Juego
-                setTimeLeft((prev) => {
-                    if (prev <= 1) { 
-                        // FIN DEL PERIODO
-                        setIsRunning(false); 
-                        timeLeftRef.current = 0; 
-                        playBuzzer(); // 🔊 SONIDO
-                        return 0; 
-                    }
-                    const newVal = prev - 1; timeLeftRef.current = newVal; return newVal;
-                });
-
-                // B) Reloj Tiro
-                if (timeLeftRef.current > shotClockRef.current) {
-                    setShotClock((prev) => {
-                        const nextVal = prev - 1;
-                        shotClockRef.current = nextVal;
-                        
-                        if (nextVal <= 0) {
-                            // VIOLACIÓN 24S
-                            setIsRunning(false); 
-                            playBuzzer(); // 🔊 SONIDO
-                            return 0; 
-                        }
-                        return nextVal;
-                    });
-                }
-            }, 100);
-        } else { clearInterval(timerRef.current); }
-        return () => clearInterval(timerRef.current);
-    }, [isRunning]);
-
-    // --- EFECTO PARA REGISTRAR VIOLACIÓN DE 24s ---
-    useEffect(() => {
-        if (shotClock === 0 && isRunning) {
-            setIsRunning(false);
-            addLog("🚨 VIOLACIÓN DE 24 SEGUNDOS", "system", "system");
-            playBuzzer();
-            alert("🔊 24 SEGUNDOS AGOTADOS");
-        }
-    }, [shotClock]);
-
-    // Regla FIBA: 3 TM -> 2 TM en 2 min finales 4Q
-    useEffect(() => {
-        if (!matchData) return;
-        if (matchData.cuarto === 4 && timeLeft <= 1200) {
-            const updates: any = {};
-            if (matchData.timeoutsLocal === 3) updates.timeoutsLocal = 2;
-            if (matchData.timeoutsVisitante === 3) updates.timeoutsVisitante = 2;
-            if (Object.keys(updates).length > 0) updateDoc(doc(db, 'calendario', matchData.id), updates);
-        }
-    }, [timeLeft, matchData]);
-
-    const handleToggleClock = useCallback(() => {
-        const willStart = !isRunning;
-        setIsRunning(willStart);
-        if (willStart && matchData && matchData.estatus === 'programado') {
-            updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo' });
-        }
-    }, [isRunning, matchData]);
-
-    const handleResetShotClock = (val: 24 | 14) => {
-        const newVal = val * 10;
-        setShotClock(newVal); shotClockRef.current = newVal;
-    };
-
-    const adjustTime = useCallback((type: 'min'|'sec', amount: number) => {
-        setTimeLeft(prev => {
-            let newVal = prev + (type === 'min' ? amount * 600 : amount * 10);
-            newVal = Math.max(0, newVal); timeLeftRef.current = newVal; return newVal;
-        });
-    }, []);
-
-    // 4. ESCUCHAR DATOS
+    // 2. ESCUCHAR DATOS DEL PARTIDO
     useEffect(() => {
         if (!selectedMatchId) return;
         const unsub = onSnapshot(doc(db, 'calendario', selectedMatchId), (docSnap) => {
@@ -324,6 +176,8 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 const data = docSnap.data() as any;
                 setMatchData({
                     id: docSnap.id, ...data,
+                    tiemposLocal: data.tiemposLocal ?? 2,
+                    tiemposVisitante: data.tiemposVisitante ?? 2,
                     staffLocal: data.staffLocal || {entrenador:'', asistente:''},
                     staffVisitante: data.staffVisitante || {entrenador:'', asistente:''},
                     forma5: data.forma5 || {},
@@ -334,7 +188,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         return () => unsub();
     }, [selectedMatchId]);
 
-    // Sincronizar Staff
+    // Sincronizar Staff cuando cambie matchData (AQUÍ ESTÁ LA CLAVE PARA QUE SE VEA EL NOMBRE)
     useEffect(() => {
         if (matchData) {
             setStaffCache({
@@ -342,150 +196,199 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 visitante: matchData.staffVisitante || {entrenador:'', asistente:''}
             });
         }
-    }, [matchData]);
+    }, [matchData?.staffLocal, matchData?.staffVisitante]);
 
-    // 5. INICIALIZAR ROSTERS
+    // 3. INICIALIZAR ROSTERS
     useEffect(() => {
         if (matchData) {
             if (localOnCourt.length === 0 && localBench.length === 0) {
                 const processTeam = (forma5Data: any) => {
                     if (!forma5Data) return { court: [], bench: [], captainId: null };
-                    let allPlayers: Player[] = [];
-                    let starters: string[] = [];
-                    let captain: string | null = null;
-                    if (forma5Data.jugadores && Array.isArray(forma5Data.jugadores)) {
-                        allPlayers = forma5Data.jugadores; starters = forma5Data.startersIds || []; captain = forma5Data.captainId || null;
-                    } else if (Array.isArray(forma5Data)) {
-                        allPlayers = forma5Data; starters = allPlayers.slice(0, 5).map(p => p.id);
-                    }
-                    const court = allPlayers.filter(p => starters.includes(p.id));
-                    const bench = allPlayers.filter(p => !starters.includes(p.id));
-                    if (court.length === 0 && allPlayers.length > 0) return { court: allPlayers.slice(0, 5), bench: allPlayers.slice(5), captainId: captain };
-                    return { court, bench, captainId: captain };
+                    let players: Player[] = [];
+                    if (Array.isArray(forma5Data)) players = forma5Data;
+                    else if (forma5Data.jugadores) players = forma5Data.jugadores;
+                    
+                    let starters = forma5Data.startersIds || players.slice(0, 5).map(p => p.id);
+                    let captain = forma5Data.captainId || null;
+                    
+                    return {
+                        court: players.filter(p => starters.includes(p.id)),
+                        bench: players.filter(p => !starters.includes(p.id)),
+                        captainId: captain
+                    };
                 };
-                const localRes = processTeam(matchData.forma5?.[matchData.equipoLocalId]);
-                setLocalOnCourt(localRes.court); setLocalBench(localRes.bench);
-                const visitorRes = processTeam(matchData.forma5?.[matchData.equipoVisitanteId]);
-                setVisitanteOnCourt(visitorRes.court); setVisitanteBench(visitorRes.bench);
-                setCaptains({ local: localRes.captainId, visitante: visitorRes.captainId });
+                const l = processTeam(matchData.forma5?.[matchData.equipoLocalId]);
+                const v = processTeam(matchData.forma5?.[matchData.equipoVisitanteId]);
+                
+                setLocalOnCourt(l.court); setLocalBench(l.bench);
+                setVisitanteOnCourt(v.court); setVisitanteBench(v.bench);
+                setCaptains({ local: l.captainId, visitante: v.captainId });
+
                 const cache: Record<string, PlayerGameStats> = {};
-                [...localRes.court, ...localRes.bench, ...visitorRes.court, ...visitorRes.bench].forEach(p => {
+                [...l.court, ...l.bench, ...v.court, ...v.bench].forEach(p => {
                     cache[p.id] = { puntos: 0, faltasPersonales: 0, faltasTecnicas: 0, faltasAntideportivas: 0, faltasDescalificantes: 0, faltasTotales: 0, expulsado: false };
                 });
                 setStatsCache(cache);
+                
+                const loadRealStats = async () => {
+                    const qStats = query(collection(db, 'stats_partido'), where('partidoId', '==', matchData.id));
+                    const snapStats = await getDocs(qStats);
+                    snapStats.forEach(d => {
+                        const s = d.data();
+                        setStatsCache(prev => ({
+                            ...prev,
+                            [s.jugadorId]: {
+                                ...prev[s.jugadorId],
+                                puntos: s.puntos || 0,
+                                faltasPersonales: s.faltasPersonales || 0,
+                                faltasTecnicas: s.faltasTecnicas || 0,
+                                faltasAntideportivas: s.faltasAntideportivas || 0,
+                                faltasDescalificantes: s.faltasDescalificantes || 0,
+                                faltasTotales: s.faltasTotales || 0,
+                                expulsado: (s.faltasTotales >= 5 || s.faltasTecnicas >= 2 || s.faltasAntideportivas >= 2 || s.faltasDescalificantes >= 1)
+                            }
+                        }));
+                    });
+                };
+                loadRealStats();
             }
         }
     }, [matchData?.id]);
 
-    const formatTimeForLog = (tenths: number) => {
-        const totalSeconds = Math.floor(tenths / 10);
-        const mins = Math.floor(totalSeconds / 60);
-        const secs = totalSeconds % 60;
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
-    };
+    const formatTimeForLog = () => matchData ? `Q${matchData.cuarto}` : 'Q1';
 
-    const addLog = async (text: string, type: GameEvent['type'], team: 'local'|'visitante'|'system') => {
+    const addLog = async (text: string, type: GameEvent['type'], team: 'local'|'visitante'|'system', playerId?: string, action?: string, val?: number) => {
         if (!matchData) return;
-        const newEvent: GameEvent = { id: Date.now().toString(), text, time: formatTimeForLog(timeLeftRef.current), team, type };
+        const newEvent: GameEvent = { 
+            id: Date.now().toString(), text, time: formatTimeForLog(), team, type, 
+            playerId, action, val
+        };
         const newLog = [newEvent, ...(matchData.gameLog || [])].slice(0, 50);
         await updateDoc(doc(db, 'calendario', matchData.id), { gameLog: newLog });
     };
 
-    // --- HANDLE STATS (AUTOMATIZACIÓN FIBA) ---
-    const handleStat = useCallback(async (player: Player, team: 'local'|'visitante', action: 'puntos'|'rebote_def'|'rebote_of'|'asistencias'|'falta_P'|'falta_T'|'falta_U'|'falta_D', val: number) => {
+    const handleDeleteLog = async (logId: string) => {
+        if (!matchData) return;
+        const logEntry = matchData.gameLog?.find(l => l.id === logId);
+        if (!logEntry) return;
+        if (!window.confirm("¿Eliminar registro?")) return;
+
+        try {
+            const updates: any = { gameLog: matchData.gameLog?.filter(l => l.id !== logId) };
+            if (logEntry.action === 'puntos' && logEntry.val) updates[logEntry.team === 'local' ? 'marcadorLocal' : 'marcadorVisitante'] = increment(-logEntry.val);
+            if (logEntry.action?.startsWith('falta')) updates[logEntry.team === 'local' ? 'faltasLocal' : 'faltasVisitante'] = increment(-1);
+            if (logEntry.type === 'timeout') updates[logEntry.team === 'local' ? 'tiemposLocal' : 'tiemposVisitante'] = increment(1);
+
+            await updateDoc(doc(db, 'calendario', matchData.id), updates);
+
+            if (logEntry.playerId && logEntry.action) {
+                const statRef = doc(db, 'stats_partido', `${matchData.id}_${logEntry.playerId}`);
+                const statUpdates: any = {};
+                
+                if (logEntry.action === 'puntos') {
+                    statUpdates.puntos = increment(-logEntry.val!);
+                    if (logEntry.val === 3) statUpdates.triples = increment(-1);
+                } else if (logEntry.action === 'rebote') {
+                    statUpdates.rebotes = increment(-1);
+                } else if (logEntry.action.startsWith('falta')) {
+                    statUpdates.faltasTotales = increment(-1);
+                    if (logEntry.action === 'falta_P') statUpdates.faltasPersonales = increment(-1);
+                    if (logEntry.action === 'falta_T') statUpdates.faltasTecnicas = increment(-1);
+                    if (logEntry.action === 'falta_U') statUpdates.faltasAntideportivas = increment(-1);
+                    if (logEntry.action === 'falta_D') statUpdates.faltasDescalificantes = increment(-1);
+                }
+
+                if (Object.keys(statUpdates).length > 0) {
+                    await setDoc(statRef, statUpdates, { merge: true });
+                    setStatsCache(prev => {
+                        const pStats = { ...prev[logEntry.playerId!] };
+                        if (logEntry.action === 'puntos') pStats.puntos -= logEntry.val!;
+                        if (logEntry.action?.startsWith('falta')) {
+                            pStats.faltasTotales -= 1;
+                            if (pStats.faltasTotales < 5) pStats.expulsado = false; 
+                        }
+                        return { ...prev, [logEntry.playerId!]: pStats };
+                    });
+                }
+            }
+        } catch (e) { console.error(e); }
+    };
+
+    const handleStat = useCallback(async (player: Player, team: 'local'|'visitante', action: 'puntos'|'rebote'|'falta_P'|'falta_T'|'falta_U'|'falta_D', val: number) => {
         if (!matchData || statsCache[player.id]?.expulsado) return; 
+        
+        if (matchData.estatus === 'programado') updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo' });
+
         const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
         const currentStats = statsCache[player.id] || { puntos:0, faltasPersonales:0, faltasTecnicas:0, faltasAntideportivas:0, faltasDescalificantes:0, faltasTotales:0, expulsado:false };
         let newStats = { ...currentStats };
         let logText = '';
-        let statField = ''; 
-
-        // === AUTOMATIZACIÓN DEL RELOJ ===
-        // 1. REBOTE DEFENSIVO -> Reset 24s
-        if (action === 'rebote_def') handleResetShotClock(24);
-        // 2. REBOTE OFENSIVO -> Reset 14s
-        if (action === 'rebote_of') handleResetShotClock(14);
-        // 3. PUNTOS -> Reset 24s y posible paro de reloj
-        if (action === 'puntos') {
-            handleResetShotClock(24); 
-            if ((matchData.cuarto === 4 && timeLeftRef.current <= 1200) || matchData.cuarto > 4) setIsRunning(false);
-        }
-        // 4. FALTAS -> Parar reloj y Ajustar posesión
-        if (action.startsWith('falta')) {
-            setIsRunning(false);
-            if (shotClockRef.current < 140) handleResetShotClock(14);
-        }
-        // ================================
 
         if (action === 'puntos') {
             newStats.puntos += val;
             logText = `🏀 ${player.nombre} (+${val})`;
-            statField = 'puntos';
             const field = team === 'local' ? 'marcadorLocal' : 'marcadorVisitante';
             await updateDoc(doc(db, 'calendario', matchData.id), { [field]: increment(val) });
         } else if (action.startsWith('falta')) {
             newStats.faltasTotales += 1;
             const field = team === 'local' ? 'faltasLocal' : 'faltasVisitante';
             await updateDoc(doc(db, 'calendario', matchData.id), { [field]: increment(1) });
-            if (action === 'falta_P') { newStats.faltasPersonales += 1; logText = `🤜 P: ${player.nombre}`; statField = 'faltas'; }
-            else if (action === 'falta_T') { newStats.faltasTecnicas += 1; logText = `⚠️ T: ${player.nombre}`; statField = 'faltas'; }
-            else if (action === 'falta_U') { newStats.faltasAntideportivas += 1; logText = `🛑 U: ${player.nombre}`; statField = 'faltas'; }
-            else if (action === 'falta_D') { newStats.faltasDescalificantes += 1; newStats.expulsado = true; logText = `⛔ D (Descalificante): ${player.nombre} - EXPULSADO`; statField = 'faltas'; alert(`🟥 EXPULSIÓN: ${player.nombre}`); }
+            if (action === 'falta_P') { newStats.faltasPersonales++; logText = `🤜 P: ${player.nombre}`; }
+            if (action === 'falta_T') { newStats.faltasTecnicas++; logText = `⚠️ T: ${player.nombre}`; }
+            if (action === 'falta_U') { newStats.faltasAntideportivas++; logText = `🛑 U: ${player.nombre}`; }
+            if (action === 'falta_D') { newStats.faltasDescalificantes++; logText = `⛔ D: ${player.nombre}`; }
 
-            if (!newStats.expulsado && (newStats.faltasTotales >= 5 || newStats.faltasAntideportivas >= 2 || newStats.faltasTecnicas >= 2)) {
-                newStats.expulsado = true; logText += " (EXPULSADO POR ACUMULACIÓN)"; alert(`🟥 EXPULSADO: ${player.nombre}`);
+            if (newStats.faltasTotales >= 5 || newStats.faltasTecnicas >= 2 || newStats.faltasAntideportivas >= 2 || newStats.faltasDescalificantes >= 1) {
+                logText += " (EXPULSADO)";
+                newStats.expulsado = true;
+                alert(`🟥 EXPULSIÓN: ${player.nombre}`);
             }
         } else {
-            if (action === 'rebote_def' || action === 'rebote_of') {
-                statField = 'rebotes';
-                logText = `🖐️ Reb (${action==='rebote_def'?'Def':'Of'}): ${player.nombre}`;
-            } else {
-                statField = action;
-                if (action === 'asistencias') logText = `🅰️ Asist: ${player.nombre}`;
-            }
+            logText = `🖐️ Rebote: ${player.nombre}`;
         }
 
         setStatsCache(prev => ({ ...prev, [player.id]: newStats }));
-        await addLog(logText, action.startsWith('falta') ? 'foul' : action === 'puntos' ? 'score' : 'stat', team);
+        await addLog(logText, action.startsWith('falta') ? 'foul' : action === 'puntos' ? 'score' : 'stat', team, player.id, action, val);
+        
         const statRef = doc(db, 'stats_partido', `${matchData.id}_${player.id}`);
         const payload: any = { partidoId: matchData.id, jugadorId: player.id, nombre: player.nombre, equipo: teamName, fecha: new Date().toISOString() };
-        if (action === 'puntos') { payload.puntos = increment(val); if (val === 3) payload.triples = increment(1); } else { payload[statField] = increment(1); }
+        if (action === 'puntos') { payload.puntos = increment(val); if(val===3) payload.triples = increment(1); }
+        if (action === 'rebote') payload.rebotes = increment(1);
+        if (action.startsWith('falta')) {
+            payload.faltasTotales = increment(1);
+            if(action === 'falta_P') payload.faltasPersonales = increment(1);
+            if(action === 'falta_T') payload.faltasTecnicas = increment(1);
+            if(action === 'falta_U') payload.faltasAntideportivas = increment(1);
+            if(action === 'falta_D') payload.faltasDescalificantes = increment(1);
+        }
         await setDoc(statRef, payload, { merge: true });
     }, [matchData, statsCache]);
 
-    // ... (Staff Action, Timeout, Subs, etc. igual que antes)
+    // --- STAFF ACTIONS (DT) ---
     const handleStaffAction = async (team: 'local'|'visitante', action: 'falta_T'|'falta_D') => {
         if (!matchData) return;
-        setIsRunning(false);
         const currentStaff = (team === 'local' ? staffCache.local : staffCache.visitante) || { entrenador: '' };
-        const staffName = currentStaff.entrenador;
-        if (!staffName) return; 
-        let logText = '';
+        if (!currentStaff.entrenador) return alert("No hay DT registrado");
+        
+        if (matchData.estatus === 'programado') updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo' });
+
+        let logText = `⚠️ T (Banca): ${currentStaff.entrenador}`;
+        if (action === 'falta_D') logText = `⛔ D (Banca): ${currentStaff.entrenador}`;
+
         const newStaffState = { ...currentStaff };
-        if (action === 'falta_T') {
-            logText = `⚠️ T (Banca/Entrenador): ${staffName}`;
-            newStaffState.faltasTecnicas = (newStaffState.faltasTecnicas || 0) + 1;
-            if (newStaffState.faltasTecnicas >= 2) { newStaffState.expulsado = true; logText += " - DT EXPULSADO"; alert(`🟥 DT EXPULSADO: ${staffName}`); }
-        } else if (action === 'falta_D') {
-            logText = `⛔ D (Descalificante): ${staffName} - DT EXPULSADO`; newStaffState.expulsado = true; alert(`🟥 DT EXPULSADO: ${staffName}`);
-        }
+        if (action === 'falta_T') newStaffState.faltasTecnicas = (newStaffState.faltasTecnicas || 0) + 1;
+        if (action === 'falta_D') newStaffState.expulsado = true;
+        if ((newStaffState.faltasTecnicas || 0) >= 2) newStaffState.expulsado = true;
+
         setStaffCache(prev => ({ ...prev, [team]: newStaffState }));
         const staffField = team === 'local' ? 'staffLocal' : 'staffVisitante';
-        await updateDoc(doc(db, 'calendario', matchData.id), { [staffField]: newStaffState });
-        await addLog(logText, 'foul', team);
+        const fieldFouls = team === 'local' ? 'faltasLocal' : 'faltasVisitante';
+        
+        await updateDoc(doc(db, 'calendario', matchData.id), { [staffField]: newStaffState, [fieldFouls]: increment(1) });
+        await addLog(logText, 'foul', team, undefined, action);
     };
 
-    const handleTimeout = async (team: 'local'|'visitante') => {
-        if (!matchData) return;
-        const remaining = team === 'local' ? matchData.timeoutsLocal : matchData.timeoutsVisitante;
-        if (remaining <= 0) { alert("⚠️ No quedan tiempos muertos."); return; }
-        if (!window.confirm(`¿Cobrar Tiempo Muerto?`)) return;
-        setIsRunning(false);
-        const field = team === 'local' ? 'timeoutsLocal' : 'timeoutsVisitante';
-        await updateDoc(doc(db, 'calendario', matchData.id), { [field]: remaining - 1 });
-        addLog(`⏱️ Tiempo Muerto: ${team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre}`, 'timeout', team);
-    };
-
+    // --- CAMBIOS ---
     const confirmSubstitution = (playerOut: Player) => {
         if (!subMode) return;
         if (subMode.team === 'local') {
@@ -501,13 +404,18 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
     const handleNextQuarter = async () => {
         if (!matchData) return;
+        if (matchData.estatus === 'programado') {
+            await updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo', cuarto: 1 });
+            addLog("📢 INICIO DEL PARTIDO", 'system', 'system');
+            return;
+        }
         if (!window.confirm(`¿Iniciar Siguiente Periodo?`)) return;
-        setIsRunning(false); setTimeLeft(6000); timeLeftRef.current = 6000;
-        handleResetShotClock(24); 
+        
         let updatePayload: any = { cuarto: increment(1), faltasLocal: 0, faltasVisitante: 0 };
         const nextQ = matchData.cuarto + 1;
-        if (nextQ === 3) { updatePayload.timeoutsLocal = 3; updatePayload.timeoutsVisitante = 3; } 
-        else if (nextQ > 4) { updatePayload.timeoutsLocal = 1; updatePayload.timeoutsVisitante = 1; }
+        if (nextQ === 3) { updatePayload.tiemposLocal = 3; updatePayload.tiemposVisitante = 3; } 
+        else if (nextQ > 4) { updatePayload.tiemposLocal = 1; updatePayload.tiemposVisitante = 1; }
+        
         await updateDoc(doc(db, 'calendario', matchData.id), updatePayload);
         addLog(`🕒 Inicio del Periodo ${nextQ}`, 'period', 'system');
     };
@@ -525,15 +433,34 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
     const handleResetGame = async () => {
         if (!matchData || !window.confirm("⚠️ ¿REINICIAR TODO?")) return;
-        setIsRunning(false); setTimeLeft(6000); timeLeftRef.current = 6000; setShotClock(240); shotClockRef.current = 240;
         const statsQ = query(collection(db, 'stats_partido'), where('partidoId', '==', matchData.id));
         const statsSnap = await getDocs(statsQ);
         await Promise.all(statsSnap.docs.map(d => deleteDoc(d.ref)));
         const cleanCache = { ...statsCache }; Object.keys(cleanCache).forEach(key => cleanCache[key] = { puntos:0, faltasPersonales:0, faltasTecnicas:0, faltasAntideportivas:0, faltasDescalificantes:0, faltasTotales:0, expulsado:false });
         setStatsCache(cleanCache);
         setLocalOnCourt([]); setLocalBench([]); setVisitanteOnCourt([]); setVisitanteBench([]);
-        await updateDoc(doc(db, 'calendario', matchData.id), { marcadorLocal: 0, marcadorVisitante: 0, faltasLocal: 0, faltasVisitante: 0, timeoutsLocal: 2, timeoutsVisitante: 2, cuarto: 1, gameLog: [], estatus: 'programado', staffLocal: null, staffVisitante: null });
+        await updateDoc(doc(db, 'calendario', matchData.id), { marcadorLocal: 0, marcadorVisitante: 0, faltasLocal: 0, faltasVisitante: 0, tiemposLocal: 2, tiemposVisitante: 2, cuarto: 1, gameLog: [], estatus: 'programado', staffLocal: null, staffVisitante: null });
         alert("Reiniciado.");
+    };
+
+    // --- TIMEOUTS ---
+    const handleTimeoutAdjustment = async (team: 'local'|'visitante', change: number) => {
+        if (!matchData) return;
+        const current = team === 'local' ? matchData.tiemposLocal : matchData.tiemposVisitante;
+        if (change < 0 && current <= 0) return;
+
+        const field = team === 'local' ? 'tiemposLocal' : 'tiemposVisitante';
+        const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
+
+        const updates: any = { [field]: increment(change) };
+        if (change < 0) {
+            const newEvent: GameEvent = {
+                id: Date.now().toString(), text: `🛑 TIEMPO MUERTO: ${teamName}`, 
+                time: formatTimeForLog(), team, type: 'timeout', action: 'timeout'
+            };
+            updates.gameLog = [newEvent, ...(matchData.gameLog || [])];
+        } 
+        await updateDoc(doc(db, 'calendario', matchData.id), updates);
     };
 
     if (!selectedMatchId) return (
@@ -558,9 +485,31 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             <style>{`.btn-stat { flex:1; padding:6px 0; font-size:0.75rem; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#2563eb; color:white; transition: opacity 0.1s; }.btn-stat:active { transform:scale(0.95); opacity:0.8; }.clock-btn { background:#333; color:white; border:1px solid #555; padding:4px 8px; cursor:pointer; font-size:0.75rem; border-radius:3px; font-weight:bold; backdrop-filter: blur(4px); background: rgba(50,50,50,0.8); }.bonus-indicator { font-size: 0.8rem; background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-top: 5px; animation: pulse 2s infinite; display:inline-block; box-shadow: 0 0 10px #ef4444; }.timeout-btn { background: #d97706; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; cursor: pointer; margin-top: 5px; display: block; width: 100%; transition: background 0.2s; }.timeout-btn:disabled { background: #555; color: #999; cursor: not-allowed; }`}</style>
             
             <div style={{backgroundImage: 'url(https://i.postimg.cc/Kj11f2z8/cartoon-basketball-court-vector.jpg)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundColor: '#000', padding:'8px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'2px solid #333', flexShrink:0}}>
-                <div style={{textAlign:'center', width:'25%'}}><div style={{color:'#60a5fa', fontWeight:'bold', fontSize:'0.9rem'}}>{matchData.equipoLocalNombre}</div><div style={{fontSize:'2.8rem', fontWeight:'bold', lineHeight:1}}>{matchData.marcadorLocal}</div><div style={{fontSize:'0.8rem', color:'#ccc'}}>FALTAS: {matchData.faltasLocal}</div>{matchData.faltasLocal >= 5 && <div className="bonus-indicator">BONUS</div>}<button className="timeout-btn" onClick={()=>handleTimeout('local')} disabled={(matchData.timeoutsLocal || 0) <= 0}>🕒 T. MUERTO ({(matchData.timeoutsLocal || 0)})</button></div>
-                <ClockDisplay timeLeft={timeLeft} shotClock={shotClock} isRunning={isRunning} periodo={matchData.cuarto} onToggle={handleToggleClock} onNextQuarter={handleNextQuarter} onAdjust={adjustTime} onResetShot={handleResetShotClock} />
-                <div style={{textAlign:'center', width:'25%'}}><div style={{color:'#fbbf24', fontWeight:'bold', fontSize:'0.9rem'}}>{matchData.equipoVisitanteNombre}</div><div style={{fontSize:'2.8rem', fontWeight:'bold', lineHeight:1}}>{matchData.marcadorVisitante}</div><div style={{fontSize:'0.8rem', color:'#ccc'}}>FALTAS: {matchData.faltasVisitante}</div>{matchData.faltasVisitante >= 5 && <div className="bonus-indicator">BONUS</div>}<button className="timeout-btn" onClick={()=>handleTimeout('visitante')} disabled={(matchData.timeoutsVisitante || 0) <= 0}>🕒 T. MUERTO ({(matchData.timeoutsVisitante || 0)})</button></div>
+                <div style={{textAlign:'center', width:'25%'}}>
+                    <div style={{color:'#60a5fa', fontWeight:'bold', fontSize:'0.9rem'}}>{matchData.equipoLocalNombre}</div>
+                    <div style={{fontSize:'2.8rem', fontWeight:'bold', lineHeight:1}}>{matchData.marcadorLocal}</div>
+                    <div style={{fontSize:'0.8rem', color:'#ccc'}}>FALTAS: {matchData.faltasLocal}</div>
+                    {matchData.faltasLocal >= 5 && <div className="bonus-indicator">BONUS</div>}
+                    <div style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'5px', marginTop:'5px'}}>
+                        <button onClick={()=>handleTimeoutAdjustment('local', -1)} style={{background:'#d97706', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor:'pointer'}}>-</button>
+                        <span style={{color:'white', fontWeight:'bold', fontSize:'0.9rem'}}>TM: {matchData.tiemposLocal}</span>
+                        <button onClick={()=>handleTimeoutAdjustment('local', 1)} style={{background:'#10b981', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor:'pointer'}}>+</button>
+                    </div>
+                </div>
+                
+                <PeriodDisplay periodo={matchData.cuarto} estatus={matchData.estatus} onNextQuarter={handleNextQuarter} />
+                
+                <div style={{textAlign:'center', width:'25%'}}>
+                    <div style={{color:'#fbbf24', fontWeight:'bold', fontSize:'0.9rem'}}>{matchData.equipoVisitanteNombre}</div>
+                    <div style={{fontSize:'2.8rem', fontWeight:'bold', lineHeight:1}}>{matchData.marcadorVisitante}</div>
+                    <div style={{fontSize:'0.8rem', color:'#ccc'}}>FALTAS: {matchData.faltasVisitante}</div>
+                    {matchData.faltasVisitante >= 5 && <div className="bonus-indicator">BONUS</div>}
+                    <div style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'5px', marginTop:'5px'}}>
+                        <button onClick={()=>handleTimeoutAdjustment('visitante', -1)} style={{background:'#d97706', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor:'pointer'}}>-</button>
+                        <span style={{color:'white', fontWeight:'bold', fontSize:'0.9rem'}}>TM: {matchData.tiemposVisitante}</span>
+                        <button onClick={()=>handleTimeoutAdjustment('visitante', 1)} style={{background:'#10b981', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor:'pointer'}}>+</button>
+                    </div>
+                </div>
             </div>
 
             <div style={{flex:1, display:'flex', overflow:'hidden'}}>
@@ -569,7 +518,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     <div style={{padding:'8px', background:'#1e3a8a', display:'flex', justifyContent:'space-between', alignItems:'center'}}><span style={{color:'#93c5fd', fontWeight:'bold', fontSize:'0.8rem'}}>LOCAL</span><button onClick={() => setBenchModalOpen('local')} style={{background:'#2563eb', color:'white', border:'none', borderRadius:'3px', padding:'2px 8px', fontSize:'0.75rem'}}>CAMBIOS</button></div>
                     <div style={{flex:1, overflowY:'auto', padding:'5px'}}>
                         {localOnCourt.map(p => <PlayerRow key={p.id} player={p} team="local" stats={statsCache[p.id]} isSubTarget={subMode?.team==='local'} onStat={handleStat} onSub={confirmSubstitution} isCaptain={captains.local === p.id} />)}
-                        <StaffRow staff={staffCache.local} team="local" onAction={(act: any) => handleStaffAction('local', act)} />
+                        <StaffRow staff={staffCache.local} team="local" onAction={(a:any) => handleStaffAction('local', a)} />
                     </div>
                 </div>
                 {/* VISITANTE */}
@@ -577,15 +526,21 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     <div style={{padding:'8px', background:'#78350f', display:'flex', justifyContent:'space-between', alignItems:'center'}}><span style={{color:'#fde047', fontWeight:'bold', fontSize:'0.8rem'}}>VISITANTE</span><button onClick={() => setBenchModalOpen('visitante')} style={{background:'#d97706', color:'white', border:'none', borderRadius:'3px', padding:'2px 8px', fontSize:'0.75rem'}}>CAMBIOS</button></div>
                     <div style={{flex:1, overflowY:'auto', padding:'5px'}}>
                         {visitanteOnCourt.map(p => <PlayerRow key={p.id} player={p} team="visitante" stats={statsCache[p.id]} isSubTarget={subMode?.team==='visitante'} onStat={handleStat} onSub={confirmSubstitution} isCaptain={captains.visitante === p.id} />)}
-                        <StaffRow staff={staffCache.visitante} team="visitante" onAction={(act: any) => handleStaffAction('visitante', act)} />
+                        <StaffRow staff={staffCache.visitante} team="visitante" onAction={(a:any) => handleStaffAction('visitante', a)} />
                     </div>
                 </div>
             </div>
 
             <div style={{height:'100px', background:'#000', borderTop:'2px solid #333', display:'flex', flexDirection:'column'}}>
-                <div style={{padding:'2px 10px', background:'#222', color:'#888', fontSize:'0.7rem', fontWeight:'bold'}}>PLAY-BY-PLAY</div>
+                <div style={{padding:'2px 10px', background:'#222', color:'#888', fontSize:'0.7rem', fontWeight:'bold'}}>PLAY-BY-PLAY (CLICK "X" PARA CORREGIR)</div>
                 <div style={{flex:1, overflowY:'auto', padding:'5px 10px', fontFamily:'monospace', fontSize:'0.8rem'}}>
-                    {matchData.gameLog?.map((log) => <div key={log.id} style={{color: log.team==='local'?'#60a5fa': log.team==='visitante'?'#fbbf24':'#ccc', borderBottom:'1px solid #1a1a1a', padding:'1px 0', display:'flex', gap:'10px'}}><span style={{opacity:0.5, minWidth:'40px'}}>{log.time}</span><span>{log.text}</span></div>)}
+                    {matchData.gameLog?.map((log) => (
+                        <div key={log.id} style={{color: log.team==='local'?'#60a5fa': log.team==='visitante'?'#fbbf24':'#ccc', borderBottom:'1px solid #1a1a1a', padding:'1px 0', display:'flex', gap:'10px', alignItems:'center'}}>
+                            <span style={{opacity:0.5, minWidth:'40px'}}>{log.time}</span>
+                            <span style={{flex:1}}>{log.text}</span>
+                            <button onClick={() => handleDeleteLog(log.id)} style={{background:'transparent', border:'1px solid #666', color:'#ef4444', cursor:'pointer', padding:'0 5px', fontSize:'0.7rem', borderRadius:'3px', marginLeft:'10px', fontWeight:'bold'}}>✖</button>
+                        </div>
+                    ))}
                 </div>
             </div>
             
