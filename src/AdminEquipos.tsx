@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore'; // Agregado deleteDoc
 
 interface Equipo {
     id: string;
@@ -51,6 +51,26 @@ const AdminEquipos: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         }
     };
 
+    // --- NUEVA FUNCIÓN PARA ELIMINAR ---
+    const handleDelete = async (id: string, nombre: string) => {
+        if (!window.confirm(`⚠️ ¿Estás seguro de ELIMINAR al equipo "${nombre}"?\nEsta acción es irreversible.`)) return;
+
+        try {
+            // Eliminar de colección equipos
+            await deleteDoc(doc(db, 'equipos', id));
+            
+            // Intentar eliminar de forma21s también para limpiar
+            try { await deleteDoc(doc(db, 'forma21s', id)); } catch(e) {}
+
+            // Actualizar lista visualmente
+            setEquipos(prev => prev.filter(eq => eq.id !== id));
+            alert("🗑️ Equipo eliminado correctamente.");
+        } catch (error) {
+            console.error(error);
+            alert("Error al eliminar equipo.");
+        }
+    };
+
     return (
         <div className="animate-fade-in" style={{
             position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.9)', zIndex:2000,
@@ -61,7 +81,7 @@ const AdminEquipos: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 display:'flex', flexDirection:'column', overflow:'hidden'
             }}>
                 <div style={{padding:'20px', background:'#1e293b', color:'white', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                    <h3 style={{margin:0}}>🛠️ Gestión de Logos</h3>
+                    <h3 style={{margin:0}}>🛡️ Gestión de Equipos</h3>
                     <button onClick={onClose} className="btn btn-secondary" style={{padding:'5px 10px'}}>Cerrar</button>
                 </div>
 
@@ -97,14 +117,24 @@ const AdminEquipos: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                                         />
                                     </div>
 
-                                    {/* BUTTON */}
+                                    {/* BOTÓN GUARDAR LOGO */}
                                     <button 
                                         onClick={() => handleUpdateLogo(eq.id)}
                                         className="btn btn-primary"
                                         style={{fontSize:'1.2rem', padding:'8px 12px'}}
-                                        title="Guardar"
+                                        title="Guardar Logo"
                                     >
                                         💾
+                                    </button>
+
+                                    {/* NUEVO BOTÓN ELIMINAR */}
+                                    <button 
+                                        onClick={() => handleDelete(eq.id, eq.nombre)}
+                                        className="btn"
+                                        style={{fontSize:'1.2rem', padding:'8px 12px', background:'#ef4444', color:'white', border:'none', borderRadius:'4px', cursor:'pointer'}}
+                                        title="Eliminar Equipo"
+                                    >
+                                        🗑️
                                     </button>
                                 </div>
                             ))}

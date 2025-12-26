@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, query, getDocs, doc, updateDoc, setDoc } from 'firebase/firestore';
+import { collection, query, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 interface Forma21 {
     id: string;
@@ -9,6 +9,7 @@ interface Forma21 {
     delegadoEmail?: string;
     rosterCompleto?: boolean;
     aprobado?: boolean;
+    delegadoId?: string; // Agregado para tipado correcto
 }
 
 const Forma21AdminViewer: React.FC<{ onClose: () => void, setViewRosterId: (id: string) => void }> = ({ onClose, setViewRosterId }) => {
@@ -27,13 +28,13 @@ const Forma21AdminViewer: React.FC<{ onClose: () => void, setViewRosterId: (id: 
                     return {
                         id: d.id,
                         ...d.data(),
-                        rosterCompleto: playersSnap.size >= 10 
+                        rosterCompleto: playersSnap.size >= 5 // Ajustado a 5 como en tu lógica anterior
                     } as Forma21;
                 }));
                 
                 setFormas(data);
             } catch (error) {
-                console.error(error);
+                console.error("Error al cargar inscripciones:", error);
             } finally {
                 setLoading(false);
             }
@@ -41,7 +42,7 @@ const Forma21AdminViewer: React.FC<{ onClose: () => void, setViewRosterId: (id: 
         fetchFormas();
     }, []);
 
-    const toggleAprobado = async (formaId: string, currentStatus: string | undefined, delegadoId: string, nombreEquipo: string) => {
+    const toggleAprobado = async (formaId: string, currentStatus: string | undefined, delegadoId: string | undefined, nombreEquipo: string) => {
         const nuevoEstado = currentStatus === 'aprobado' ? 'pendiente' : 'aprobado';
         
         if (nuevoEstado === 'aprobado') {
@@ -51,19 +52,58 @@ const Forma21AdminViewer: React.FC<{ onClose: () => void, setViewRosterId: (id: 
         }
 
         try {
-            // 1. Actualizar estatus en Forma 21
             await updateDoc(doc(db, 'forma21s', formaId), { estatus: nuevoEstado, aprobado: nuevoEstado === 'aprobado' });
             
-            // 2. Actualizar estatus en la colección de Equipos (Tabla de Posiciones)
-            await updateDoc(doc(db, 'equipos', formaId), { estatus: nuevoEstado });
+            try {
+                await updateDoc(doc(db, 'equipos', formaId), { estatus: nuevoEstado });
+            } catch(e) { console.log("El equipo no existe en la tabla de posiciones aún."); }
 
             setFormas(prev => prev.map(f => f.id === formaId ? { ...f, estatus: nuevoEstado, aprobado: nuevoEstado === 'aprobado' } : f));
             
             alert(`Estatus de ${nombreEquipo} cambiado a ${nuevoEstado}.`);
 
         } catch (e) {
-            console.error(e);
-            alert("Error al actualizar estatus");
+            console.error("Error al cambiar estatus:", e);
+            alert("Error al actualizar estatus. Revisa la consola.");
+        }
+    };
+
+    // --- FUNCIÓN DE ELIMINAR ROBUSTA ---
+    const handleDelete = async (id: string, nombre: string) => {
+        if (!window.confirm(`⚠️ PELIGRO ⚠️\n\n¿Estás seguro de ELIMINAR la inscripción de "${nombre}"?\n\nSe borrarán:\n1. La inscripción (Forma 21)\n2. Todos los jugadores registrados\n3. El equipo de la tabla general`)) return;
+
+        try {
+            console.log("Iniciando eliminación del equipo:", id);
+
+            // 1. Borrar Jugadores (Subcolección)
+            // Firestore no borra subcolecciones automáticamente, hay que hacerlo manual
+            const jugadoresRef = collection(db, 'forma21s', id, 'jugadores');
+            const jugadoresSnap = await getDocs(jugadoresRef);
+            
+            const deletePromises = jugadoresSnap.docs.map(doc => deleteDoc(doc.ref));
+            await Promise.all(deletePromises);
+            console.log("Jugadores eliminados.");
+
+            // 2. Borrar Forma 21 (Inscripción)
+            await deleteDoc(doc(db, 'forma21s', id));
+            console.log("Forma 21 eliminada.");
+            
+            // 3. Borrar de Equipos (Tabla General) - Si existe
+            try {
+                await deleteDoc(doc(db, 'equipos', id));
+                console.log("Equipo de tabla general eliminado.");
+            } catch (e) {
+                console.warn("No se encontró en colección equipos o ya estaba borrado.");
+            }
+
+            // Actualizar tabla visualmente
+            setFormas(prev => prev.filter(f => f.id !== id));
+            alert("✅ Equipo eliminado correctamente y por completo.");
+
+        } catch (error: any) {
+            console.error("Error CRÍTICO al eliminar:", error);
+            // Mostrar mensaje de error más útil
+            alert(`❌ Error al eliminar: ${error.message || "Revisa permisos en Firebase"}`);
         }
     };
 
@@ -111,9 +151,20 @@ const Forma21AdminViewer: React.FC<{ onClose: () => void, setViewRosterId: (id: 
                                     </button>
                                 </td>
                                 <td style={{padding:'15px', textAlign:'center'}}>
-                                    <button onClick={() => setViewRosterId(f.id)} className="btn btn-primary" style={{fontSize:'0.8rem'}}>
-                                        👁️ Ver Roster
-                                    </button>
+                                    <div style={{display:'flex', gap:'5px', justifyContent:'center'}}>
+                                        <button onClick={() => setViewRosterId(f.id)} className="btn btn-primary" style={{fontSize:'0.8rem', padding:'5px 10px'}} title="Ver Roster">
+                                            👁️
+                                        </button>
+                                        {/* BOTON ELIMINAR */}
+                                        <button 
+                                            onClick={() => handleDelete(f.id, f.nombreEquipo)} 
+                                            className="btn" 
+                                            style={{fontSize:'0.8rem', background:'#ef4444', color:'white', padding:'5px 10px'}} 
+                                            title="Eliminar Equipo Definitivamente"
+                                        >
+                                            🗑️
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                         ))}
