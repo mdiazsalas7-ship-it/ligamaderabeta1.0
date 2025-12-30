@@ -26,6 +26,7 @@ import NewsAdmin from './NewsAdmin';
 import NewsFeed from './NewsFeed';   
 import AdminEquipos from './AdminEquipos';
 import PlayoffBracket from './PlayoffBracket'; 
+import InstallButton from './InstallButton'; // <--- IMPORTACIÓN NUEVA
 
 // Interfaces
 interface Equipo { 
@@ -263,6 +264,10 @@ function App() {
             <h1 style={{fontSize: '1.2rem', margin: 0, color: '#1f2937', fontWeight: '800'}}>LIGA MADERA 15</h1>
         </div>
         <div style={{display: 'flex', alignItems: 'center', gap: '15px'}}>
+            
+            {/* BOTÓN INSTALAR APP (Nuevo) */}
+            <InstallButton />
+            
             <span style={{fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--primary)', background: '#eff6ff', padding: '4px 10px', borderRadius: '20px'}}>{user.rol.toUpperCase()}</span>
             <button onClick={()=>signOut(auth)} style={{background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem'}} title="Salir">🚪</button>
         </div>
@@ -279,19 +284,13 @@ function App() {
         {standingsView && <StandingsViewer equipos={equipos} onClose={() => setStandingsView(false)} />}
         {newsAdminView && <NewsAdmin onClose={() => setNewsAdminView(false)} />}
         {adminEquiposView && <AdminEquipos onClose={() => setAdminEquiposView(false)} />}
-        
-        {/* CORRECCIÓN ROSTER VIEWER: adminMode */}
         {viewRosterId && <RosterViewer forma21Id={viewRosterId} nombreEquipo={formas21.find(f=>f.id===viewRosterId)?.nombreEquipo || 'Equipo'} onClose={() => setViewRosterId(null)} adminMode={user.rol === 'admin'} />}
-        
         {matchView && <MatchForm onSuccess={() => {setMatchView(false); refreshData();}} onClose={() => setMatchView(false)} />}
         {adminFormView && <Forma21AdminViewer onClose={() => setAdminFormView(false)} setViewRosterId={setViewRosterId} />}
         {usersView && <UserManagement onClose={() => setUsersView(false)} />}
         {registroView && <RegistroForma21 onSuccess={refreshData} onClose={() => setRegistroView(false)} />}
         {selectedFormId && <RosterForm forma21Id={selectedFormId} nombreEquipo={formas21.find(f=>f.id===selectedFormId)?.nombreEquipo || 'Equipo'} onSuccess={() => {setSelectedFormId(null); refreshData();}} onClose={() => setSelectedFormId(null)} />}
-        
-        {/* CORRECCIÓN FORMA 5: Asegurar ID de Equipo */}
         {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || user.uid} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
-        
         {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={refreshData} />}
         {showBracket && <PlayoffBracket adminMode={user.rol === 'admin'} onClose={() => setShowBracket(false)} />}
 

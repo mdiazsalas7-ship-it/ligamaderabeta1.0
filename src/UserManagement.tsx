@@ -1,65 +1,153 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore'; 
-import type { DocumentData } from 'firebase/firestore'; 
+import { collection, getDocs, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
 
-interface AppUser extends DocumentData { id: string; uid?: string; email: string; rol: 'admin' | 'delegado' | 'pendiente' | 'jugador'; }
-const ROLES_VALIDOS: ('admin' | 'delegado' | 'pendiente' | 'jugador')[] = ['admin', 'delegado', 'jugador', 'pendiente'];
+interface UserData {
+    id: string;
+    email: string;
+    rol: string;
+    equipoId?: string; // Para identificar si es un delegado con equipo
+}
 
-const UserManagement: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
-    const [users, setUsers] = useState<AppUser[]>([]);
+const UserManagement: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+    
+    const [users, setUsers] = useState<UserData[]>([]);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
 
-    const fetchUsers = async () => {
-        setLoading(true); setError(null);
+    // Cargar usuarios
+    useEffect(() => {
+        const fetchUsers = async () => {
+            try {
+                // Obtenemos todos los usuarios
+                const q = query(collection(db, 'usuarios')); 
+                const snap = await getDocs(q);
+                
+                const list = snap.docs.map(d => ({
+                    id: d.id,
+                    ...d.data()
+                } as UserData));
+
+                // Ordenar: Admin primero, luego delegados, etc.
+                list.sort((a,b) => {
+                    if(a.rol === 'admin') return -1;
+                    if(b.rol === 'admin') return 1;
+                    return a.email?.localeCompare(b.email || '') || 0;
+                });
+
+                setUsers(list);
+            } catch (error) {
+                console.error("Error cargando usuarios:", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchUsers();
+    }, []);
+
+    // Función para borrar usuario
+    const handleDeleteUser = async (userId: string, userEmail: string, userRol: string) => {
+        if (userRol === 'admin') {
+            alert("❌ No puedes eliminar a un Administrador desde aquí.");
+            return;
+        }
+
+        if (!window.confirm(`⚠️ ¿ELIMINAR USUARIO?\n\nEmail: ${userEmail}\nRol: ${userRol}\n\nEsta acción eliminará su acceso y sus datos de perfil.`)) return;
+
         try {
-            const usersRef = collection(db, 'usuarios');
-            const snapshot = await getDocs(usersRef);
-            const userList = snapshot.docs.map(doc => {
-                const data = doc.data();
-                return { id: doc.id, ...data, email: data.email || 'Sin Email', rol: data.rol || 'pendiente' } as AppUser;
-            });
-            userList.sort((a, b) => {
-                if (a.rol === 'pendiente' && b.rol !== 'pendiente') return -1;
-                if (a.rol !== 'pendiente' && b.rol === 'pendiente') return 1;
-                const emailA = a.email ? a.email.toLowerCase() : '';
-                const emailB = b.email ? b.email.toLowerCase() : '';
-                return emailA.localeCompare(emailB);
-            });
-            setUsers(userList);
-        } catch (err: any) { setError(`Error: ${err.message}`); } finally { setLoading(false); }
+            // 1. Eliminar documento de la colección 'usuarios'
+            await deleteDoc(doc(db, 'usuarios', userId));
+
+            // 2. Si es delegado, opcionalmente podríamos borrar su equipo, 
+            // pero mejor dejemos el equipo y solo borremos el acceso para no romper torneos pasados.
+            // Si quieres borrar el equipo también, descomenta lo siguiente:
+            /*
+            if (userRol === 'delegado') {
+                 if(window.confirm("¿Deseas eliminar también su EQUIPO y ROSTER?")) {
+                     await deleteDoc(doc(db, 'forma21s', userId));
+                     await deleteDoc(doc(db, 'equipos', userId));
+                     // Nota: Faltaría borrar subcolección jugadores, pero Firestore no lo hace automático en cliente.
+                 }
+            }
+            */
+
+            setUsers(prev => prev.filter(u => u.id !== userId));
+            alert("✅ Usuario eliminado correctamente.");
+
+        } catch (error) {
+            console.error("Error eliminando usuario:", error);
+            alert("Error al eliminar usuario.");
+        }
     };
-
-    useEffect(() => { fetchUsers(); }, []);
-
-    const updateRole = async (userId: string, newRole: AppUser['rol']) => {
-        if (!window.confirm(`¿Cambiar rol a "${newRole.toUpperCase()}"?`)) return;
-        try {
-            await updateDoc(doc(db, 'usuarios', userId), { rol: newRole });
-            setUsers(prev => prev.map(u => u.id === userId ? { ...u, rol: newRole } : u));
-        } catch (err) { setError(`Error al actualizar.`); fetchUsers(); }
-    };
-
-    if (loading) return <div className="card" style={{textAlign: 'center', padding: '40px'}}>Cargando...</div>;
 
     return (
-        <div className="animate-fade-in" style={{ maxWidth: '1200px', margin: '0 auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <div><h2 style={{fontSize: '1.5rem', color: 'var(--primary)'}}>👥 Gestión de Usuarios</h2><p style={{color: 'var(--text-muted)', fontSize: '0.9rem'}}>Administra accesos y roles.</p></div>
-                <div style={{display: 'flex', gap: '10px'}}><button onClick={fetchUsers} className="btn btn-secondary" style={{fontSize: '0.9rem', padding: '8px 15px'}}>🔄 Actualizar</button>{onClose && <button onClick={onClose} className="btn btn-secondary">← Volver</button>}</div>
+        <div className="animate-fade-in" style={{
+            position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(243, 244, 246, 0.95)', 
+            display:'flex', flexDirection:'column', zIndex:2000, overflowY:'auto'
+        }}>
+            <div style={{
+                padding:'20px', background:'white', boxShadow:'0 2px 4px rgba(0,0,0,0.05)', 
+                display:'flex', justifyContent:'space-between', alignItems:'center', position:'sticky', top:0, zIndex:1001
+            }}>
+                <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+                    <span style={{fontSize:'1.5rem'}}>👥</span>
+                    <h2 style={{margin:0, color:'#1f2937'}}>Gestión de Usuarios</h2>
+                </div>
+                <button onClick={onClose} className="btn btn-secondary">Cerrar</button>
             </div>
-            
-            {error && <div className="badge badge-danger" style={{marginBottom:'10px', display:'block'}}>{error}</div>}
 
-            <div className="dashboard-grid" style={{marginBottom: '30px', marginTop: '0'}}>
-                <div className="dashboard-card" style={{height: 'auto', padding: '15px', alignItems: 'flex-start', textAlign: 'left', borderLeft: '4px solid var(--primary)'}}><span style={{fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 'bold'}}>Total</span><span style={{fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--primary)'}}>{users.length}</span></div>
-                <div className="dashboard-card" style={{height: 'auto', padding: '15px', alignItems: 'flex-start', textAlign: 'left', borderLeft: '4px solid var(--danger)'}}><span style={{fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 'bold'}}>Pendientes</span><span style={{fontSize: '1.8rem', fontWeight: 'bold', color: users.filter(u=>u.rol==='pendiente').length > 0 ? 'var(--danger)' : 'var(--success)'}}>{users.filter(u=>u.rol==='pendiente').length}</span></div>
-                <div className="dashboard-card" style={{height: 'auto', padding: '15px', alignItems: 'flex-start', textAlign: 'left', borderLeft: '4px solid var(--accent)'}}><span style={{fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 'bold'}}>Admins</span><span style={{fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--text-main)'}}>{users.filter(u=>u.rol==='admin').length}</span></div>
+            <div style={{maxWidth:'800px', margin:'20px auto', width:'95%', background:'white', borderRadius:'12px', padding:'20px', boxShadow:'0 4px 6px rgba(0,0,0,0.05)'}}>
+                
+                <h3 style={{marginTop:0, marginBottom:'15px', color:'#374151'}}>Lista de Usuarios Registrados ({users.length})</h3>
+
+                {loading ? <div style={{textAlign:'center', padding:'20px'}}>Cargando...</div> : (
+                    <div style={{overflowX:'auto'}}>
+                        <table style={{width:'100%', borderCollapse:'collapse', minWidth:'500px'}}>
+                            <thead style={{background:'#f3f4f6', borderBottom:'2px solid #e5e7eb'}}>
+                                <tr>
+                                    <th style={{padding:'12px', textAlign:'left', color:'#6b7280'}}>Email / Usuario</th>
+                                    <th style={{padding:'12px', textAlign:'center', color:'#6b7280'}}>Rol</th>
+                                    <th style={{padding:'12px', textAlign:'center', color:'#6b7280'}}>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {users.map(u => (
+                                    <tr key={u.id} style={{borderBottom:'1px solid #eee'}}>
+                                        <td style={{padding:'12px'}}>
+                                            <div style={{fontWeight:'bold', color:'#1f2937'}}>{u.email || 'Sin Email'}</div>
+                                            <div style={{fontSize:'0.75rem', color:'#9ca3af', fontFamily:'monospace'}}>ID: {u.id}</div>
+                                        </td>
+                                        <td style={{padding:'12px', textAlign:'center'}}>
+                                            <span style={{
+                                                padding:'4px 10px', borderRadius:'15px', fontSize:'0.8rem', fontWeight:'bold', textTransform:'uppercase',
+                                                background: u.rol === 'admin' ? '#fef3c7' : (u.rol === 'delegado' ? '#dbeafe' : '#f3f4f6'),
+                                                color: u.rol === 'admin' ? '#d97706' : (u.rol === 'delegado' ? '#1e40af' : '#4b5563')
+                                            }}>
+                                                {u.rol}
+                                            </span>
+                                        </td>
+                                        <td style={{padding:'12px', textAlign:'center'}}>
+                                            {u.rol !== 'admin' && (
+                                                <button 
+                                                    onClick={() => handleDeleteUser(u.id, u.email, u.rol)}
+                                                    className="btn"
+                                                    style={{
+                                                        background:'#fee2e2', color:'#991b1b', border:'1px solid #fecaca', 
+                                                        padding:'6px 12px', borderRadius:'6px', cursor:'pointer', fontSize:'0.85rem'
+                                                    }}
+                                                >
+                                                    🗑️ Eliminar
+                                                </button>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
-
-            <div className="card" style={{padding: '0', overflow: 'hidden'}}><div className="table-responsive"><table className="data-table"><thead><tr><th>Usuario</th><th>Rol</th><th>Cambiar Rol</th></tr></thead><tbody>{users.map((user) => (<tr key={user.id}><td><div style={{fontWeight: '600'}}>{user.email}</div><div style={{fontSize: '0.75rem', color: 'var(--text-muted)'}}>ID: {user.id.substring(0,6)}...</div></td><td><span className={`badge ${user.rol === 'admin' ? 'badge-success' : user.rol === 'pendiente' ? 'badge-danger' : 'badge-warning'}`}>{user.rol.toUpperCase()}</span></td><td><select value={user.rol} onChange={(e) => updateRole(user.id, e.target.value as any)} style={{marginBottom: 0, padding: '6px', fontSize: '0.85rem'}}>{ROLES_VALIDOS.map(r => <option key={r} value={r}>{r.toUpperCase()}</option>)}</select></td></tr>))}</tbody></table></div></div>
         </div>
     );
 };
+
 export default UserManagement;
