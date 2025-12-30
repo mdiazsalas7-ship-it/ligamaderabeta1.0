@@ -1,136 +1,163 @@
-import React, { useState } from 'react';
-import { db, auth } from './firebase'; 
-import { collection, addDoc, doc, updateDoc, setDoc, query, where, getDocs } from 'firebase/firestore';
-import LogoUploader from './LogoUploader'; // <--- IMPORTANTE: Importamos el componente
+import React, { useState, useEffect } from 'react';
+import { db, auth } from './firebase';
+import { collection, addDoc, query, where, getDocs, serverTimestamp, setDoc, doc } from 'firebase/firestore';
 
 const RegistroForma21: React.FC<{ onSuccess: () => void, onClose: () => void }> = ({ onSuccess, onClose }) => {
-    const user = auth.currentUser;
+    
+    // Solo pedimos datos del EQUIPO y DELEGADO, no de la cuenta
     const [nombreEquipo, setNombreEquipo] = useState('');
-    const [logoUrl, setLogoUrl] = useState(''); // Aquí se guardará la URL que nos devuelva el LogoUploader
-    const [loading, setLoading] = useState(false);
+    const [nombreDelegado, setNombreDelegado] = useState('');
+    const [telefono, setTelefono] = useState('');
+    
     const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [equiposExistentes, setEquiposExistentes] = useState<string[]>([]);
 
-    const DEFAULT_LOGO = "https://cdn-icons-png.flaticon.com/512/166/166344.png"; 
+    // 1. Cargar nombres de equipos existentes para evitar duplicados
+    useEffect(() => {
+        const fetchEquipos = async () => {
+            const q = query(collection(db, 'forma21s'));
+            const snap = await getDocs(q);
+            const nombres = snap.docs.map(d => d.data().nombreEquipo.toLowerCase().trim());
+            setEquiposExistentes(nombres);
+        };
+        fetchEquipos();
+    }, []);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        
-        if (loading) return; // Bloqueo anti doble click
-
-        if (!user) {
-            setError("No hay sesión activa. Recarga la página.");
-            return;
-        }
-
-        if (!nombreEquipo.trim()) {
-            setError('El nombre del equipo no puede estar vacío.');
-            return;
-        }
-
-        setLoading(true);
         setError('');
+        setLoading(true);
+
+        if (!nombreEquipo.trim() || !nombreDelegado.trim() || !telefono.trim()) {
+            setError('Todos los campos son obligatorios.');
+            setLoading(false);
+            return;
+        }
+
+        // VALIDACIÓN: El equipo ya existe
+        if (equiposExistentes.includes(nombreEquipo.toLowerCase().trim())) {
+            setError(`El equipo "${nombreEquipo}" ya está registrado. Por favor elige otro nombre.`);
+            setLoading(false);
+            return;
+        }
 
         try {
-            const userId = user.uid;
-            const nombreLimpio = nombreEquipo.trim();
-            
-            // 1. VALIDACIÓN ANTI-DUPLICADOS
-            const qDuplicado = query(collection(db, 'equipos'), where('nombre', '==', nombreLimpio));
-            const snapDuplicado = await getDocs(qDuplicado);
+            const user = auth.currentUser;
+            if (!user) throw new Error("No hay usuario autenticado.");
 
-            if (!snapDuplicado.empty) {
-                throw new Error("⚠️ Ya existe un equipo registrado con ese nombre. Por favor elige otro.");
-            }
+            // GUARDAR DATOS DEL EQUIPO (FORMA 21)
+            // Usamos el UID del usuario como ID del documento para facilitar la relación 1 a 1
+            const equipoId = user.uid; 
 
-            // Usamos la URL que vino del Uploader o el default
-            const finalLogoUrl = logoUrl || DEFAULT_LOGO;
-
-            // 2. Crear Forma 21
-            const forma21Ref = collection(db, 'forma21s');
-            const newForma21 = await addDoc(forma21Ref, {
-                delegadoId: userId,
+            // 1. Crear documento en 'forma21s'
+            await setDoc(doc(db, 'forma21s', equipoId), {
+                delegadoId: user.uid,
                 delegadoEmail: user.email,
-                nombreEquipo: nombreLimpio,
-                logoUrl: finalLogoUrl,
-                fechaRegistro: new Date(),
-                estatus: 'pendiente', 
+                nombreDelegado: nombreDelegado,
+                telefono: telefono,
+                nombreEquipo: nombreEquipo.trim(), // Importante el trim
+                logoUrl: "", // Se gestiona después en el Dashboard
+                fechaRegistro: serverTimestamp(),
+                estatus: 'pendiente', // Esperando aprobación del admin
                 aprobado: false,
-                rosterCerrado: false 
+                rosterCompleto: false
             });
 
-            // 3. Crear Equipo Oficial con el MISMO ID
-            const equipoRef = doc(db, 'equipos', newForma21.id);
-            await setDoc(equipoRef, {
-                nombre: nombreLimpio,
-                forma21Id: newForma21.id,
-                logoUrl: finalLogoUrl,
-                estatus: 'pendiente',
-                victorias: 0, derrotas: 0, puntos: 0, puntos_favor: 0, puntos_contra: 0,
+            // 2. Crear documento placeholder en 'equipos' (Tabla de Posiciones)
+            // Se crea inactivo hasta que el admin apruebe, pero reservamos el nombre
+            await setDoc(doc(db, 'equipos', equipoId), {
+                nombre: nombreEquipo.trim(),
+                victorias: 0,
+                derrotas: 0,
+                puntos: 0,
+                puntos_favor: 0,
+                puntos_contra: 0,
+                logoUrl: "",
+                estatus: 'pendiente'
             });
 
-            // 4. Actualizar Usuario
-            const userRef = doc(db, 'usuarios', userId);
-            await updateDoc(userRef, {
-                equipoId: newForma21.id,
-                rol: 'delegado' 
-            });
-
-            alert(`✅ ¡Equipo ${nombreLimpio} registrado con éxito!`);
-            onSuccess(); 
+            onSuccess(); // Esto recargará la App y cambiará el rol a 'delegado'
 
         } catch (err: any) {
             console.error(err);
-            setError(err.message || 'Error al registrar. Intenta de nuevo.');
+            setError(err.message || 'Error al registrar el equipo.');
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <div className="animate-fade-in" style={{maxWidth:'450px', margin:'0 auto', padding:'30px', background:'white', borderRadius:'12px', boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}>
-            <h2 style={{color:'var(--primary)', borderBottom:'2px solid #eee', paddingBottom:'10px', marginTop:0}}>📝 Inscripción de Nuevo Equipo</h2>
-            <p style={{color:'#6b7280', fontSize:'0.9rem'}}>Completa los datos para registrarte como delegado.</p>
+        <div style={{
+            position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.8)', 
+            display:'flex', justifyContent:'center', alignItems:'center', zIndex:2000
+        }}>
+            <div className="animate-fade-in" style={{
+                background:'white', padding:'30px', borderRadius:'12px', width:'90%', maxWidth:'400px',
+                boxShadow:'0 10px 25px rgba(0,0,0,0.2)'
+            }}>
+                <h2 style={{color:'#1f2937', textAlign:'center', marginBottom:'10px'}}>📋 Registro de Equipo</h2>
+                <p style={{textAlign:'center', color:'#666', fontSize:'0.9rem', marginBottom:'20px'}}>
+                    Completa los datos de tu equipo para la Liga Madera 15.
+                </p>
 
-            <form onSubmit={handleSubmit} style={{display:'flex', flexDirection:'column', gap:'20px'}}>
-                
-                {/* CAMBIO: Usamos LogoUploader en lugar del input de texto y la imagen estática */}
-                <div style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
-                    <label style={{fontWeight:'bold', marginBottom:'10px'}}>Logo del Equipo:</label>
-                    <LogoUploader 
-                        onUploadSuccess={(url) => setLogoUrl(url)} 
-                    />
-                    <small style={{color:'#6b7280', fontSize:'0.75rem', marginTop:'5px'}}>
-                        Toca la cámara para subir una imagen de tu galería
-                    </small>
-                </div>
+                {error && <div style={{background:'#fee2e2', color:'#991b1b', padding:'10px', borderRadius:'6px', marginBottom:'15px', fontSize:'0.9rem'}}>{error}</div>}
 
-                <div>
-                    <label style={{display:'block', fontWeight:'bold', marginBottom:'5px'}}>Tu Correo (Delegado):</label>
-                    <input type="text" value={user?.email || ''} disabled style={{width:'100%', padding:'10px', border:'1px solid #ccc', borderRadius:'6px', background:'#f8f8f8'}} />
-                </div>
+                <form onSubmit={handleSubmit} style={{display:'flex', flexDirection:'column', gap:'15px'}}>
+                    
+                    <div>
+                        <label style={{display:'block', fontWeight:'bold', fontSize:'0.9rem', marginBottom:'5px'}}>Nombre del Equipo:</label>
+                        <input 
+                            type="text" 
+                            value={nombreEquipo}
+                            onChange={(e) => setNombreEquipo(e.target.value)}
+                            placeholder="Ej. Los Toros"
+                            style={{width:'100%', padding:'10px', border:'1px solid #ccc', borderRadius:'6px'}}
+                        />
+                    </div>
 
-                <div>
-                    <label htmlFor="nombreEquipo" style={{display:'block', fontWeight:'bold', marginBottom:'5px'}}>Nombre del Equipo:</label>
-                    <input 
-                        id="nombreEquipo"
-                        type="text"
-                        value={nombreEquipo}
-                        onChange={(e) => setNombreEquipo(e.target.value)}
-                        required
-                        placeholder="Ej: Los Toros de Morichal"
-                        style={{width:'100%', padding:'10px', border:'1px solid #ccc', borderRadius:'6px'}}
-                    />
-                </div>
-                
-                {error && <p style={{color:'red', fontSize:'0.85rem', margin:'0', padding:'10px', background:'#fee2e2', borderRadius:'4px', fontWeight:'bold'}}>{error}</p>}
+                    <div>
+                        <label style={{display:'block', fontWeight:'bold', fontSize:'0.9rem', marginBottom:'5px'}}>Nombre del Delegado:</label>
+                        <input 
+                            type="text" 
+                            value={nombreDelegado}
+                            onChange={(e) => setNombreDelegado(e.target.value)}
+                            placeholder="Tu nombre completo"
+                            style={{width:'100%', padding:'10px', border:'1px solid #ccc', borderRadius:'6px'}}
+                        />
+                    </div>
 
-                <div style={{display:'flex', gap:'10px', marginTop:'15px'}}>
-                    <button type="button" onClick={onClose} className="btn btn-secondary" style={{flex:1}}>Cancelar</button>
-                    <button type="submit" disabled={loading} className="btn btn-primary" style={{flex:1}}>
-                        {loading ? 'Procesando...' : 'Registrar Equipo'}
-                    </button>
-                </div>
-            </form>
+                    <div>
+                        <label style={{display:'block', fontWeight:'bold', fontSize:'0.9rem', marginBottom:'5px'}}>Teléfono / WhatsApp:</label>
+                        <input 
+                            type="tel" 
+                            value={telefono}
+                            onChange={(e) => setTelefono(e.target.value)}
+                            placeholder="0414-1234567"
+                            style={{width:'100%', padding:'10px', border:'1px solid #ccc', borderRadius:'6px'}}
+                        />
+                    </div>
+
+                    <div style={{marginTop:'10px', display:'flex', gap:'10px'}}>
+                        <button 
+                            type="button" 
+                            onClick={onClose}
+                            className="btn btn-secondary"
+                            style={{flex:1}}
+                        >
+                            Cancelar
+                        </button>
+                        <button 
+                            type="submit" 
+                            className="btn btn-primary"
+                            disabled={loading}
+                            style={{flex:1}}
+                        >
+                            {loading ? 'Guardando...' : 'Crear Equipo'}
+                        </button>
+                    </div>
+                </form>
+            </div>
         </div>
     );
 };

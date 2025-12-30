@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import './App.css'; 
 import { db, auth } from './firebase'; 
-import { collection, getDocs, doc, onSnapshot, query, where, limit, orderBy } from 'firebase/firestore'; 
+import { collection, getDocs, doc, onSnapshot, query, where, limit, orderBy, updateDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth'; 
 import type { DocumentData } from 'firebase/firestore'; 
 
@@ -25,7 +25,7 @@ import MatchDetailViewer from './MatchDetailViewer';
 import NewsAdmin from './NewsAdmin'; 
 import NewsFeed from './NewsFeed';   
 import AdminEquipos from './AdminEquipos';
-import PlayoffBracket from './PlayoffBracket'; // NUEVO COMPONENTE
+import PlayoffBracket from './PlayoffBracket'; 
 
 // Interfaces
 interface Equipo { 
@@ -68,13 +68,11 @@ function App() {
   const [newsAdminView, setNewsAdminView] = useState(false);
   const [newsFeedView, setNewsFeedView] = useState(false);
   const [adminEquiposView, setAdminEquiposView] = useState(false);
-  const [showBracket, setShowBracket] = useState(false); // NUEVO ESTADO PLAYOFFS
+  const [showBracket, setShowBracket] = useState(false); 
   
   const [dataRefreshKey, setDataRefreshKey] = useState(0); 
   
-  // Referencias para evitar notificaciones duplicadas al cargar
   const initialLoadDone = useRef(false);
-
 
   const refreshData = () => { setDataRefreshKey(prev => prev + 1); closeAllViews(); };
 
@@ -101,9 +99,8 @@ function App() {
       }
   };
 
-  // 2. DETECTOR DE CAMBIOS PARA NOTIFICACIONES Y LIVE MATCHES
+  // 2. DETECTOR DE CAMBIOS
   useEffect(() => {
-      // A) DETECTAR INICIO DE PARTIDOS
       const qMatches = query(collection(db, 'calendario')); 
       const unsubMatches = onSnapshot(qMatches, (snap) => {
           const lives = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => m.estatus === 'vivo');
@@ -122,7 +119,6 @@ function App() {
           }
       });
 
-      // B) DETECTAR NOTICIAS NUEVAS
       const qNews = query(collection(db, 'noticias'), orderBy('fecha', 'desc'), limit(1));
       const unsubNews = onSnapshot(qNews, (snap) => {
           if (initialLoadDone.current) {
@@ -188,24 +184,55 @@ function App() {
     loadData();
   }, [user, dataRefreshKey]);
 
+  // --- NUEVAS FUNCIONES PARA SELECCIÓN DE ROL ---
+  
+  const handleRoleSelect = async (rol: 'jugador' | 'fan') => {
+      if (!user) return;
+      try {
+          await updateDoc(doc(db, 'usuarios', user.uid), { rol: rol });
+      } catch (error) {
+          console.error("Error asignando rol:", error);
+          alert("Error al asignar rol.");
+      }
+  };
+
+  const handleDelegadoSuccess = async () => {
+      if (!user) return;
+      try {
+          await updateDoc(doc(db, 'usuarios', user.uid), { rol: 'delegado' });
+          window.location.reload(); 
+      } catch (e) {
+          console.error(e);
+      }
+  };
+
   if (loading) return <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100vh'}}>Cargando...</div>;
   if (!user) return <Login />;
   
+  // --- PANTALLA PENDIENTE ---
   if (user.rol === 'pendiente') {
       return (
         <div className="login-wrapper">
             {registroView ? (
-                <RegistroForma21 
-                    onSuccess={() => { window.location.reload(); }} 
-                    onClose={() => setRegistroView(false)} 
-                />
+                <RegistroForma21 onSuccess={handleDelegadoSuccess} onClose={() => setRegistroView(false)} />
             ) : (
-                <div className="login-box" style={{textAlign:'center'}}>
-                    <h2>👋 ¡Bienvenido a la Liga!</h2>
-                    <p>Has creado tu cuenta correctamente.</p>
-                    <p style={{marginBottom:'20px', color:'#666'}}>Para comenzar, debes registrar a tu equipo como Delegado.</p>
-                    <button onClick={() => setRegistroView(true)} className="btn btn-primary" style={{width:'100%', marginBottom:'10px', padding:'12px', fontSize:'1rem'}}>📝 Inscribir mi Equipo</button>
-                    <button onClick={()=>signOut(auth)} className="btn btn-secondary" style={{width:'100%'}}>Cerrar Sesión</button>
+                <div className="login-box" style={{textAlign:'center', maxWidth:'450px'}}>
+                    <h2 style={{color:'#1f2937', marginBottom:'10px'}}>👋 Bienvenido</h2>
+                    <p style={{color:'#666', marginBottom:'25px'}}>Selecciona cómo deseas participar en la liga:</p>
+                    <div style={{display:'flex', flexDirection:'column', gap:'15px'}}>
+                        <button onClick={() => setRegistroView(true)} className="btn btn-primary" style={{padding:'15px', fontSize:'1.1rem', display:'flex', alignItems:'center', justifyContent:'center', gap:'10px'}}>
+                            📋 Registrar Delegado <span style={{fontSize:'0.8rem', opacity:0.8}}>(Crear Equipo)</span>
+                        </button>
+                        <button onClick={() => handleRoleSelect('jugador')} className="btn" style={{padding:'15px', fontSize:'1.1rem', background:'#10b981', color:'white', border:'none', borderRadius:'6px', cursor:'pointer'}}>
+                            ⛹️ Registrar Jugador
+                        </button>
+                        <button onClick={() => handleRoleSelect('fan')} className="btn btn-secondary" style={{padding:'15px', fontSize:'1.1rem'}}>
+                            🏀 Registrar Fan
+                        </button>
+                    </div>
+                    <div style={{marginTop:'30px', borderTop:'1px solid #eee', paddingTop:'15px'}}>
+                        <button onClick={()=>signOut(auth)} style={{background:'none', border:'none', textDecoration:'underline', cursor:'pointer', color:'#999'}}>Cerrar Sesión</button>
+                    </div>
                 </div>
             )}
         </div>
@@ -230,24 +257,13 @@ function App() {
 
   return (
     <div className="app-container" style={{backgroundColor: '#f3f4f6', minHeight: '100vh'}}>
-      
-      {/* HEADER */}
-      <header className="header" style={{
-          background: 'white', padding: '10px 20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100
-      }}>
+      <header className="header" style={{background: 'white', padding: '10px 20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100}}>
         <div style={{display: 'flex', alignItems: 'center', gap: '15px'}}>
-            <img 
-                src="https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg" 
-                alt="Liga Madera 15" 
-                style={{height: '50px', width: 'auto', borderRadius:'4px'}} 
-            />
+            <img src="https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg" alt="Liga Madera 15" style={{height: '50px', width: 'auto', borderRadius:'4px'}} />
             <h1 style={{fontSize: '1.2rem', margin: 0, color: '#1f2937', fontWeight: '800'}}>LIGA MADERA 15</h1>
         </div>
         <div style={{display: 'flex', alignItems: 'center', gap: '15px'}}>
-            <span style={{fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--primary)', background: '#eff6ff', padding: '4px 10px', borderRadius: '20px'}}>
-                {user.rol.toUpperCase()}
-            </span>
+            <span style={{fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--primary)', background: '#eff6ff', padding: '4px 10px', borderRadius: '20px'}}>{user.rol.toUpperCase()}</span>
             <button onClick={()=>signOut(auth)} style={{background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem'}} title="Salir">🚪</button>
         </div>
       </header>
@@ -263,88 +279,71 @@ function App() {
         {standingsView && <StandingsViewer equipos={equipos} onClose={() => setStandingsView(false)} />}
         {newsAdminView && <NewsAdmin onClose={() => setNewsAdminView(false)} />}
         {adminEquiposView && <AdminEquipos onClose={() => setAdminEquiposView(false)} />}
-        {viewRosterId && <RosterViewer forma21Id={viewRosterId} nombreEquipo={formas21.find(f=>f.id===viewRosterId)?.nombreEquipo || 'Equipo'} onClose={() => setViewRosterId(null)} />}
+        
+        {/* CORRECCIÓN ROSTER VIEWER: adminMode */}
+        {viewRosterId && <RosterViewer forma21Id={viewRosterId} nombreEquipo={formas21.find(f=>f.id===viewRosterId)?.nombreEquipo || 'Equipo'} onClose={() => setViewRosterId(null)} adminMode={user.rol === 'admin'} />}
+        
         {matchView && <MatchForm onSuccess={() => {setMatchView(false); refreshData();}} onClose={() => setMatchView(false)} />}
         {adminFormView && <Forma21AdminViewer onClose={() => setAdminFormView(false)} setViewRosterId={setViewRosterId} />}
         {usersView && <UserManagement onClose={() => setUsersView(false)} />}
         {registroView && <RegistroForma21 onSuccess={refreshData} onClose={() => setRegistroView(false)} />}
         {selectedFormId && <RosterForm forma21Id={selectedFormId} nombreEquipo={formas21.find(f=>f.id===selectedFormId)?.nombreEquipo || 'Equipo'} onSuccess={() => {setSelectedFormId(null); refreshData();}} onClose={() => setSelectedFormId(null)} />}
-        {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || ''} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
-        {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={refreshData} />}
         
-        {/* COMPONENTE DE PLAYOFFS */}
+        {/* CORRECCIÓN FORMA 5: Asegurar ID de Equipo */}
+        {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || user.uid} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
+        
+        {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={refreshData} />}
         {showBracket && <PlayoffBracket adminMode={user.rol === 'admin'} onClose={() => setShowBracket(false)} />}
 
-        {/* DASHBOARD PRINCIPAL */}
         {isDashboard && (
             <div className="animate-fade-in">
-                
-                {/* HERO BIENVENIDA */}
-                <div style={{
-                    background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)',
-                    borderRadius: '16px', padding: '30px', color: 'white', marginBottom: '30px',
-                    boxShadow: '0 10px 25px -5px rgba(59, 130, 246, 0.5)'
-                }}>
+                <div style={{background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', borderRadius: '16px', padding: '30px', color: 'white', marginBottom: '30px', boxShadow: '0 10px 25px -5px rgba(59, 130, 246, 0.5)'}}>
                     <h2 style={{margin: '0 0 10px 0', fontSize: '1.8rem'}}>Hola, {user.email?.split('@')[0]} 👋</h2>
                     <p style={{margin: 0, opacity: 0.9}}>Bienvenido al panel de control.</p>
                 </div>
 
-                {/* 🔥 ZONA DE PARTIDOS EN VIVO (GAMECAST) 🔥 */}
                 {liveMatches.length > 0 && (
                     <div style={{marginBottom:'30px'}}>
-                        <h3 style={{color:'#ef4444', marginBottom:'15px', display:'flex', alignItems:'center', gap:'10px', animation:'pulse 2s infinite'}}>
-                            🔴 EN VIVO AHORA
-                        </h3>
+                        <h3 style={{color:'#ef4444', marginBottom:'15px', display:'flex', alignItems:'center', gap:'10px', animation:'pulse 2s infinite'}}>🔴 EN VIVO AHORA</h3>
                         <div style={{display:'grid', gap:'15px'}}>
                             {liveMatches.map((m: any) => (
-                                <div key={m.id} onClick={() => setLiveMatchId(m.id)} style={{
-                                    background: 'linear-gradient(135deg, #111 0%, #222 100%)',
-                                    borderRadius: '12px', padding: '20px', cursor: 'pointer',
-                                    border: '2px solid #ef4444', boxShadow: '0 0 15px rgba(239, 68, 68, 0.4)',
-                                    color: 'white', display:'flex', flexDirection:'column', alignItems:'center'
-                                }}>
-                                    <div style={{fontSize:'0.9rem', color:'#fbbf24', fontWeight:'bold', marginBottom:'10px'}}>
-                                        {m.cancha ? `📍 ${m.cancha}` : '🔥 PARTIDO EN CURSO'}
-                                    </div>
+                                <div key={m.id} onClick={() => setLiveMatchId(m.id)} style={{background: 'linear-gradient(135deg, #111 0%, #222 100%)', borderRadius: '12px', padding: '20px', cursor: 'pointer', border: '2px solid #ef4444', boxShadow: '0 0 15px rgba(239, 68, 68, 0.4)', color: 'white', display:'flex', flexDirection:'column', alignItems:'center'}}>
+                                    <div style={{fontSize:'0.9rem', color:'#fbbf24', fontWeight:'bold', marginBottom:'10px'}}>{m.cancha ? `📍 ${m.cancha}` : '🔥 PARTIDO EN CURSO'}</div>
                                     <div style={{display:'flex', justifyContent:'space-between', width:'100%', alignItems:'center', marginBottom:'15px'}}>
-                                        <div style={{textAlign:'center', flex:1}}>
-                                            <div style={{fontWeight:'bold', fontSize:'1.2rem'}}>{m.equipoLocalNombre}</div>
-                                            <div style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorLocal}</div>
-                                        </div>
+                                        <div style={{textAlign:'center', flex:1}}><div style={{fontWeight:'bold', fontSize:'1.2rem'}}>{m.equipoLocalNombre}</div><div style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorLocal}</div></div>
                                         <div style={{fontWeight:'bold', color:'#666', fontSize:'1.2rem'}}>VS</div>
-                                        <div style={{textAlign:'center', flex:1}}>
-                                            <div style={{fontWeight:'bold', fontSize:'1.2rem'}}>{m.equipoVisitanteNombre}</div>
-                                            <div style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorVisitante}</div>
-                                        </div>
+                                        <div style={{textAlign:'center', flex:1}}><div style={{fontWeight:'bold', fontSize:'1.2rem'}}>{m.equipoVisitanteNombre}</div><div style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorVisitante}</div></div>
                                     </div>
-                                    <button className="btn" style={{
-                                        background:'#ef4444', color:'white', width:'100%', fontWeight:'bold', 
-                                        padding:'12px', borderRadius:'8px', textTransform:'uppercase'
-                                    }}>
-                                        📺 Ver Transmisión Play-by-Play
-                                    </button>
+                                    <button className="btn" style={{background:'#ef4444', color:'white', width:'100%', fontWeight:'bold', padding:'12px', borderRadius:'8px', textTransform:'uppercase'}}>📺 Ver Transmisión Play-by-Play</button>
                                 </div>
                             ))}
                         </div>
                     </div>
                 )}
 
-                {/* ZONA DE TORNEO (MENÚ) */}
                 <h3 style={{fontSize: '1.1rem', color: '#6b7280', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>Zona de Torneo</h3>
                 <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '20px', marginBottom: '40px'}}>
                     <DashboardCard title="Noticias" icon="📢" color="#ef4444" onClick={()=>setNewsFeedView(true)} />
                     <DashboardCard title="Calendario" icon="📅" color="#3b82f6" onClick={()=>setCalendarView(true)} />
                     <DashboardCard title="Tabla General" icon="🏆" color="#eab308" onClick={()=>setStandingsView(true)} />
                     <DashboardCard title="Líderes" icon="📊" color="#10b981" onClick={()=>setStatsView(true)} />
-                    {/* BOTÓN PLAYOFFS PARA TODOS */}
                     <DashboardCard title="Fase Final" icon="⚔️" color="#7c3aed" onClick={()=>setShowBracket(true)} />
                 </div>
 
-                {/* MENÚS ESPECÍFICOS POR ROL */}
                 {user.rol === 'delegado' && (
                     <div style={{marginBottom: '40px'}}>
                         <h3 style={{fontSize: '1.1rem', color: '#6b7280', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>Mi Equipo</h3>
-                        <DelegadoDashboard formas21={formas21} userUid={user.uid} userEquipoId={user.equipoId||null} refreshData={refreshData} setViewRosterId={setViewRosterId} setSelectedFormId={setSelectedFormId} setSelectForma5MatchId={setSelectForma5MatchId} onRegister={() => setRegistroView(true)} />
+                        {/* CORRECCIÓN: Asegurar ID del Equipo (user.uid es el fallback seguro) */}
+                        <DelegadoDashboard 
+                            formas21={formas21} 
+                            userUid={user.uid} 
+                            userEquipoId={user.equipoId || user.uid} 
+                            refreshData={refreshData} 
+                            setViewRosterId={setViewRosterId} 
+                            setSelectedFormId={setSelectedFormId} 
+                            setSelectForma5MatchId={setSelectForma5MatchId} 
+                            onRegister={() => setRegistroView(true)} 
+                        />
                     </div>
                 )}
 
@@ -364,7 +363,6 @@ function App() {
                             <DashboardCard title="Gestionar Logos" icon="🛡️" variant="admin" onClick={()=>setAdminEquiposView(true)} />
                             <DashboardCard title="Usuarios" icon="👥" variant="admin" onClick={()=>setUsersView(true)} />
                             <DashboardCard title="Marcador Manual" icon="🖊️" variant="admin" onClick={()=>setMatchView(true)} />
-                            {/* BOTÓN PLAYOFFS ADMIN */}
                             <DashboardCard title="Gestionar Playoffs" icon="⚙️" variant="admin" onClick={()=>setShowBracket(true)} />
                         </div>
                     </div>

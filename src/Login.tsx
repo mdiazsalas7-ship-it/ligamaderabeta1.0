@@ -1,203 +1,135 @@
-// src/Login.tsx (SISTEMA DE REGISTRO CON ROLES: FAN, JUGADOR, DELEGADO)
-
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { auth, db } from './firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, collection, getDocs, addDoc } from 'firebase/firestore'; 
+import { doc, setDoc } from 'firebase/firestore';
 
 const Login: React.FC = () => {
     const [isRegistering, setIsRegistering] = useState(false);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [error, setError] = useState<string | null>(null);
-    
-    // Estados para el registro detallado
-    const [role, setRole] = useState<'fan' | 'jugador' | 'delegado'>('fan');
-    const [teams, setTeams] = useState<{id: string, nombre: string}[]>([]);
-    const [selectedTeamId, setSelectedTeamId] = useState('');
-    const [newTeamName, setNewTeamName] = useState('');
+    const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    // Cargar equipos al iniciar para el selector
-    useEffect(() => {
-        const fetchTeams = async () => {
-            try {
-                const snap = await getDocs(collection(db, 'equipos'));
-                setTeams(snap.docs.map(d => ({ id: d.id, nombre: d.data().nombre })));
-            } catch (e) { console.error("Error cargando equipos", e); }
-        };
-        if (isRegistering) fetchTeams();
-    }, [isRegistering]);
-
-    const handleLogin = async (e: React.FormEvent) => {
-        e.preventDefault(); setError(null); setLoading(true);
-        try {
-            await signInWithEmailAndPassword(auth, email, password);
-        } catch (err: any) {
-            setError("Credenciales incorrectas o usuario no encontrado.");
-            setLoading(false);
-        }
-    };
-
-    const handleRegister = async (e: React.FormEvent) => {
-        e.preventDefault(); setError(null); setLoading(true);
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
 
         try {
-            // 1. Crear usuario en Auth
-            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-            const uid = userCredential.user.uid;
+            if (isRegistering) {
+                // --- REGISTRO NUEVO ---
+                // 1. Crear usuario en Auth
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                const user = userCredential.user;
 
-            // 2. Preparar datos base
-            let userData: any = { email, rol: role }; // Fan y Jugador entran directo con su rol
-
-            // 3. Lógica según Rol
-            if (role === 'fan') {
-                // Fan: Solo guardamos su equipo favorito si eligió uno
-                if (selectedTeamId) userData.equipoFavoritoId = selectedTeamId;
-            
-            } else if (role === 'jugador') {
-                // Jugador: DEBE seleccionar equipo (o quedar libre)
-                if (selectedTeamId) userData.equipoId = selectedTeamId;
-                else { throw new Error("Debes seleccionar a qué equipo perteneces."); }
-            
-            } else if (role === 'delegado') {
-                // Delegado: Queda PENDIENTE de aprobación
-                userData.rol = 'pendiente'; 
-                userData.rolSolicitado = 'delegado'; // Para que el admin sepa qué quería ser
-
-                if (selectedTeamId) {
-                    // Quiere ser delegado de equipo existente
-                    userData.solicitudEquipoId = selectedTeamId;
-                } else if (newTeamName.trim().length > 0) {
-                    // Quiere registrar equipo nuevo
-                    // Creamos el equipo de una vez para reservar el nombre, pero la forma 21 queda pendiente
-                    const equipoRef = await addDoc(collection(db, 'equipos'), { 
-                        nombre: newTeamName, victorias: 0, derrotas: 0, puntos_favor: 0, puntos_contra: 0 
-                    });
-                    
-                    // Creamos la Forma 21 inicial
-                    await setDoc(doc(collection(db, 'forma21s'), equipoRef.id), {
-                        nombreEquipo: newTeamName,
-                        delegadoId: uid,
-                        delegadoEmail: email,
-                        equipoId: equipoRef.id,
-                        fechaRegistro: new Date(),
-                        aprobado: false, // Importante: Requiere aprobación Admin
-                        rosterCompleto: false
-                    });
-
-                    userData.equipoId = equipoRef.id; // Lo asociamos preliminarmente
-                } else {
-                    throw new Error("Selecciona un equipo o escribe el nombre del nuevo.");
-                }
+                // 2. Crear perfil BASE en Firestore (SIN ROL NI EQUIPO AÚN)
+                // Esto disparará la pantalla de selección en App.tsx
+                await setDoc(doc(db, 'usuarios', user.uid), {
+                    email: user.email,
+                    rol: 'pendiente', // <--- CLAVE: Entra como pendiente
+                    createdAt: new Date()
+                });
+            } else {
+                // --- INICIAR SESIÓN ---
+                await signInWithEmailAndPassword(auth, email, password);
             }
-
-            // 4. Guardar en Firestore
-            await setDoc(doc(db, 'usuarios', uid), userData);
-            
-            // Si no es delegado, entra directo. Si es delegado, el App.tsx mostrará pantalla de pendiente.
-            setLoading(false);
-
         } catch (err: any) {
             console.error(err);
-            setError(err.message || "Error al registrar.");
+            if (err.code === 'auth/email-already-in-use') {
+                setError('Este correo ya está registrado.');
+            } else if (err.code === 'auth/wrong-password') {
+                setError('Contraseña incorrecta.');
+            } else if (err.code === 'auth/user-not-found') {
+                setError('Usuario no encontrado.');
+            } else {
+                setError('Error al conectar. Verifica tus datos.');
+            }
+        } finally {
             setLoading(false);
         }
     };
 
     return (
-        <div className="login-wrapper">
-            <div className="login-box animate-fade-in">
-                <img src="https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg" alt="Logo" style={{ width: '90px', height: '90px', borderRadius: '20px', marginBottom: '20px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
-                
-                <h2 style={{fontSize: '1.5rem', marginBottom: '5px'}}>
-                    {isRegistering ? 'Únete a la Liga' : 'Bienvenido'}
-                </h2>
-                <p style={{color: 'var(--text-muted)', marginBottom: '20px', fontSize: '0.9rem'}}>Liga de Baloncesto Madera 15</p>
-                
-                {error && <div className="badge badge-danger" style={{display:'block', marginBottom:'15px', padding:'10px'}}>{error}</div>}
+        <div style={{
+            display: 'flex', justifyContent: 'center', alignItems: 'center', 
+            height: '100vh', background: 'linear-gradient(135deg, #1e3a8a 0%, #111827 100%)',
+            padding: '20px'
+        }}>
+            <div className="animate-fade-in" style={{
+                background: 'white', padding: '40px', borderRadius: '16px', 
+                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', width: '100%', maxWidth: '400px'
+            }}>
+                <div style={{textAlign: 'center', marginBottom: '30px'}}>
+                    <img 
+                        src="https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg" 
+                        alt="Logo" 
+                        style={{width: '80px', borderRadius: '10px', marginBottom: '15px'}} 
+                    />
+                    <h2 style={{color: '#1f2937', margin: '0 0 5px 0'}}>Liga Madera 15</h2>
+                    <p style={{color: '#6b7280', fontSize: '0.9rem'}}>
+                        {isRegistering ? 'Crea tu cuenta para comenzar' : 'Inicia sesión en tu cuenta'}
+                    </p>
+                </div>
 
-                <form onSubmit={isRegistering ? handleRegister : handleLogin} style={{textAlign: 'left'}}>
-                    <div style={{marginBottom: '15px'}}>
-                        <label>Email</label>
-                        <input type="email" placeholder="tu@email.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                {error && (
+                    <div style={{
+                        background: '#fee2e2', color: '#991b1b', padding: '10px', 
+                        borderRadius: '6px', marginBottom: '20px', fontSize: '0.9rem', textAlign: 'center'
+                    }}>
+                        {error}
                     </div>
-                    <div style={{marginBottom: '15px'}}>
-                        <label>Contraseña</label>
-                        <input type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                )}
+
+                <form onSubmit={handleSubmit} style={{display: 'flex', flexDirection: 'column', gap: '15px'}}>
+                    <div>
+                        <label style={{display: 'block', fontSize: '0.9rem', fontWeight: 'bold', color: '#374151', marginBottom: '5px'}}>
+                            Correo Electrónico
+                        </label>
+                        <input 
+                            type="email" 
+                            required 
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            style={{width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #d1d5db', fontSize: '1rem'}}
+                            placeholder="ejemplo@correo.com"
+                        />
                     </div>
 
-                    {/* CAMPOS EXTRA SOLO PARA REGISTRO */}
-                    {isRegistering && (
-                        <div className="animate-fade-in" style={{padding: '15px', background: '#f9fafb', borderRadius: '10px', marginBottom: '15px', border: '1px solid var(--border)'}}>
-                            <label>Quiero registrarme como:</label>
-                            <div style={{display: 'flex', gap: '10px', marginBottom: '15px'}}>
-                                <button type="button" onClick={() => setRole('fan')} className={`btn ${role==='fan'?'btn-primary':'btn-secondary'}`} style={{flex:1, fontSize:'0.8rem'}}>Fan 🏀</button>
-                                <button type="button" onClick={() => setRole('jugador')} className={`btn ${role==='jugador'?'btn-primary':'btn-secondary'}`} style={{flex:1, fontSize:'0.8rem'}}>Jugador ⛹️</button>
-                                <button type="button" onClick={() => setRole('delegado')} className={`btn ${role==='delegado'?'btn-primary':'btn-secondary'}`} style={{flex:1, fontSize:'0.8rem'}}>Delegado 📋</button>
-                            </div>
+                    <div>
+                        <label style={{display: 'block', fontSize: '0.9rem', fontWeight: 'bold', color: '#374151', marginBottom: '5px'}}>
+                            Contraseña
+                        </label>
+                        <input 
+                            type="password" 
+                            required 
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            style={{width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #d1d5db', fontSize: '1rem'}}
+                            placeholder="******"
+                        />
+                    </div>
 
-                            {role === 'fan' && (
-                                <div>
-                                    <label>Equipo Favorito (Opcional)</label>
-                                    <select value={selectedTeamId} onChange={(e) => setSelectedTeamId(e.target.value)}>
-                                        <option value="">-- Sin favorito --</option>
-                                        {teams.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
-                                    </select>
-                                </div>
-                            )}
-
-                            {role === 'jugador' && (
-                                <div>
-                                    <label>¿A qué equipo perteneces?</label>
-                                    <select value={selectedTeamId} onChange={(e) => setSelectedTeamId(e.target.value)} required>
-                                        <option value="">-- Selecciona tu equipo --</option>
-                                        {teams.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
-                                    </select>
-                                </div>
-                            )}
-
-                            {role === 'delegado' && (
-                                <div>
-                                    <label>Gestionar Equipo</label>
-                                    <select 
-                                        value={selectedTeamId} 
-                                        onChange={(e) => { setSelectedTeamId(e.target.value); setNewTeamName(''); }} 
-                                        style={{marginBottom: '10px'}}
-                                    >
-                                        <option value="">-- Crear Equipo Nuevo --</option>
-                                        {teams.map(t => <option key={t.id} value={t.id}>Ya existe: {t.nombre}</option>)}
-                                    </select>
-                                    
-                                    {!selectedTeamId && (
-                                        <input 
-                                            type="text" 
-                                            placeholder="Nombre del Nuevo Equipo" 
-                                            value={newTeamName} 
-                                            onChange={(e) => setNewTeamName(e.target.value)} 
-                                            style={{borderColor: 'var(--accent)'}}
-                                        />
-                                    )}
-                                    <p style={{fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '5px'}}>
-                                        * Los delegados requieren aprobación del Admin.
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    <button type="submit" className="btn btn-primary" style={{width: '100%', padding: '12px'}} disabled={loading}>
-                        {loading ? 'Procesando...' : (isRegistering ? 'Crear Cuenta' : 'Ingresar')}
+                    <button 
+                        type="submit" 
+                        disabled={loading}
+                        className="btn"
+                        style={{
+                            background: '#2563eb', color: 'white', padding: '12px', borderRadius: '8px', 
+                            fontSize: '1rem', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '10px'
+                        }}
+                    >
+                        {loading ? 'Procesando...' : (isRegistering ? 'Registrarse' : 'Entrar')}
                     </button>
                 </form>
-                
-                <div style={{marginTop: '20px', fontSize: '0.9rem'}}>
-                    <span style={{color: 'var(--text-muted)'}}>
-                        {isRegistering ? '¿Ya tienes cuenta?' : '¿Eres nuevo?'}
-                    </span>
+
+                <div style={{textAlign: 'center', marginTop: '20px', fontSize: '0.9rem', color: '#666'}}>
+                    {isRegistering ? '¿Ya tienes cuenta?' : '¿No tienes cuenta?'}
                     <button 
-                        onClick={() => { setIsRegistering(!isRegistering); setError(null); }} 
-                        style={{background: 'none', border: 'none', color: 'var(--primary)', fontWeight: 'bold', cursor: 'pointer', marginLeft: '5px'}}
+                        onClick={() => { setIsRegistering(!isRegistering); setError(''); }}
+                        style={{
+                            background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', 
+                            cursor: 'pointer', marginLeft: '5px', textDecoration: 'underline'
+                        }}
                     >
                         {isRegistering ? 'Inicia Sesión' : 'Regístrate aquí'}
                     </button>
