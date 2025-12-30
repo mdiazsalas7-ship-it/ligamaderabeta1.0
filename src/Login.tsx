@@ -52,12 +52,21 @@ const Login: React.FC = () => {
     return (
         <div style={{
             display: 'flex', justifyContent: 'center', alignItems: 'center', 
-            height: '100vh', background: 'linear-gradient(135deg, #1e3a8a 0%, #111827 100%)',
-            padding: '20px'
+            height: '100vh', 
+            width: '100vw',
+            padding: '20px',
+            // --- FONDO DE IMAGEN ---
+            backgroundImage: 'url(https://i.postimg.cc/1R8bFsPZ/Whats_App_Image_2025_12_30_at_3_47_13_PM.jpg)',
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
+            position: 'fixed',
+            top: 0,
+            left: 0
         }}>
             <div className="animate-fade-in" style={{
                 background: 'white', padding: '40px', borderRadius: '16px', 
-                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', width: '100%', maxWidth: '400px'
+                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)', width: '100%', maxWidth: '400px'
             }}>
                 <div style={{textAlign: 'center', marginBottom: '30px'}}>
                     <img 
@@ -82,7 +91,7 @@ const Login: React.FC = () => {
 
                 <form onSubmit={handleSubmit} style={{display: 'flex', flexDirection: 'column', gap: '15px'}}>
                     <div>
-                        <label style={{display: 'block', fontSize: '0.9rem', fontWeight: 'bold', color: '#374151', marginBottom: '5px'}}>
+                        <label style={{display: 'block', fontSize: '0.8rem', fontWeight: 'bold', color: '#374151', marginBottom: '5px', textTransform: 'uppercase'}}>
                             Correo Electrónico
                         </label>
                         <input 
@@ -90,13 +99,13 @@ const Login: React.FC = () => {
                             required 
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
-                            style={{width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #d1d5db', fontSize: '1rem'}}
+                            style={{width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #d1d5db', fontSize: '1rem', boxSizing:'border-box'}}
                             placeholder="ejemplo@correo.com"
                         />
                     </div>
 
                     <div>
-                        <label style={{display: 'block', fontSize: '0.9rem', fontWeight: 'bold', color: '#374151', marginBottom: '5px'}}>
+                        <label style={{display: 'block', fontSize: '0.8rem', fontWeight: 'bold', color: '#374151', marginBottom: '5px', textTransform: 'uppercase'}}>
                             Contraseña
                         </label>
                         <input 
@@ -104,7 +113,7 @@ const Login: React.FC = () => {
                             required 
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            style={{width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #d1d5db', fontSize: '1rem'}}
+                            style={{width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #d1d5db', fontSize: '1rem', boxSizing:'border-box'}}
                             placeholder="******"
                         />
                     </div>

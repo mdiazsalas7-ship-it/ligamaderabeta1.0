@@ -199,9 +199,8 @@ function App() {
     loadData();
   }, [user, dataRefreshKey]);
 
-  // --- ACCIONES DE REGISTRO ---
+  // --- ACCIONES ---
 
-  // 1. REGISTRO JUGADOR / FAN (PIDE NOMBRE DE UNA VEZ)
   const handleRoleSelect = async (rol: 'jugador' | 'fan') => {
       if (!user) return;
       
@@ -224,7 +223,6 @@ function App() {
       }
   };
 
-  // 2. REGISTRO DELEGADO (YA PIDE DATOS EN EL FORMULARIO)
   const handleDelegadoSuccess = async () => {
       if (!user) return;
       try { 
@@ -233,7 +231,6 @@ function App() {
       } catch (e) { console.error(e); }
   };
 
-  // 3. EDITAR NOMBRE (SI SE EQUIVOCÓ O ES VIEJO)
   const handleEditName = async () => {
       if (!user) return;
       const nuevoNombre = prompt("Ingresa tu nombre para mostrar en el panel:", user.nombre || "");
@@ -245,13 +242,25 @@ function App() {
   if (loading) return <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100vh'}}>Cargando...</div>;
   if (!user) return <Login />;
   
+  // --- PANTALLA DE REGISTRO (ROL PENDIENTE) ---
   if (user.rol === 'pendiente') {
       return (
-        <div className="login-wrapper">
+        <div className="login-wrapper" style={{
+            // AQUÍ ESTÁ LA NUEVA IMAGEN DE FONDO PARA LA PANTALLA DE REGISTRO
+            backgroundImage: 'url(https://i.postimg.cc/W11GDbLn/madera15.jpg)',
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
+            minHeight: '100vh',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+        }}>
             {registroView ? (
                 <RegistroForma21 onSuccess={handleDelegadoSuccess} onClose={() => setRegistroView(false)} />
             ) : (
-                <div className="login-box" style={{textAlign:'center', maxWidth:'450px'}}>
+                // Caja blanca semitransparente para que el texto se lea bien sobre el fondo
+                <div className="login-box" style={{textAlign:'center', maxWidth:'450px', background:'rgba(255, 255, 255, 0.95)', padding:'30px', borderRadius:'15px', boxShadow:'0 10px 25px rgba(0,0,0,0.5)'}}>
                     <h2 style={{color:'#1f2937', marginBottom:'10px'}}>👋 Bienvenido</h2>
                     <p style={{color:'#666', marginBottom:'25px'}}>Selecciona cómo deseas participar:</p>
                     <div style={{display:'flex', flexDirection:'column', gap:'15px'}}>
@@ -284,12 +293,10 @@ function App() {
     </div>
   );
 
-  // --- LÓGICA INTELIGENTE DE NOMBRES ---
   let displayName = user.nombre; 
   let displayTeamName = '';
   let displayTeamLogo = '';
 
-  // 1. Si NO tiene nombre en perfil y es DELEGADO, buscamos en su Forma21
   if (!displayName && user.rol === 'delegado') {
       const f21 = formas21.find(f => f.delegadoId === user.uid);
       if (f21 && f21.nombreDelegado) {
@@ -297,12 +304,10 @@ function App() {
       }
   }
 
-  // Si después de buscar sigue vacío, usamos el email
   if (!displayName) {
       displayName = user.email?.split('@')[0] || 'Usuario';
   }
 
-  // Lógica de Equipos
   if (user.equipoId) {
       const eq = equipos.find(e => e.id === user.equipoId);
       if (eq) { displayTeamName = eq.nombre; displayTeamLogo = eq.logoUrl || ''; }
@@ -311,6 +316,7 @@ function App() {
       if (f21) { displayTeamName = f21.nombreEquipo; displayTeamLogo = f21.logoUrl || ''; }
   }
 
+  // --- DASHBOARD PRINCIPAL (Mantiene la cancha oscura) ---
   return (
     <div className="app-container" style={{
         backgroundImage: 'url(https://i.postimg.cc/wMdsqw2D/unnamed.jpg)',
@@ -351,7 +357,6 @@ function App() {
         {isDashboard && (
             <div className="animate-fade-in">
                 
-                {/* TARJETA DE BIENVENIDA */}
                 <div style={{
                     background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', 
                     borderRadius: '16px', padding: '25px', color: 'white', marginBottom: '30px', 
