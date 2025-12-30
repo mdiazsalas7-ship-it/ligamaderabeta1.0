@@ -1,91 +1,64 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, query, doc, deleteDoc, updateDoc, addDoc, onSnapshot, getDocs, where } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, getDocs, deleteDoc, addDoc } from 'firebase/firestore';
 
-interface Match { 
-    id: string; 
-    fecha: string; 
-    hora: string; 
-    equipoA: string; 
-    equipoB: string; 
-    categoria: string; 
-    rama: string; 
-    cancha: string; 
-    estatus: string; 
-    logoUrlA?: string; 
-    logoUrlB?: string; 
-    resultadoA?: number; 
-    resultadoB?: number; 
+interface Match {
+    id: string;
+    equipoLocalNombre: string;
+    equipoVisitanteNombre: string;
+    fechaAsignada: string;
+    hora: string;
+    estatus: string; // 'programado', 'vivo', 'finalizado'
+    cancha: string;
+    marcadorLocal?: number;
+    marcadorVisitante?: number;
     jornada?: number;
 }
 
-const CalendarViewer: React.FC<{ 
-    rol: string, 
-    onClose: () => void, 
-    onViewLive: (id: string) => void, 
-    onViewDetail: (id: string) => void 
-}> = ({ rol, onClose, onViewLive, onViewDetail }) => {
+interface ApprovedTeam {
+    id: string;
+    nombreEquipo: string;
+    logoUrl?: string;
+}
+
+const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (id: string) => void, onViewDetail: (id: string) => void }> = ({ rol, onClose, onViewLive, onViewDetail }) => {
     
-    const [partidos, setPartidos] = useState<Match[]>([]);
+    const [matches, setMatches] = useState<Match[]>([]);
+    const [approvedTeams, setApprovedTeams] = useState<ApprovedTeam[]>([]);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState('todos');
     const [generating, setGenerating] = useState(false);
-    const [logosCache, setLogosCache] = useState<Record<string, string>>({});
+    
+    // Estado para EDICIÓN RÁPIDA (Solo Admin)
+    const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
+    const [editDate, setEditDate] = useState('');
+    const [editTime, setEditTime] = useState('');
 
-    // 1. CARGAR LOGOS DE EQUIPOS
     useEffect(() => {
-        const q = query(collection(db, 'equipos'));
-        const unsub = onSnapshot(q, (snap) => {
-            const cache: Record<string, string> = {};
-            snap.forEach(d => {
-                const data = d.data();
-                if (data.nombre && data.logoUrl) {
-                    cache[String(data.nombre).trim()] = data.logoUrl;
-                }
-            });
-            setLogosCache(cache);
-        });
-        return () => unsub();
-    }, []);
-
-    // 2. CARGAR CALENDARIO
-    useEffect(() => {
-        const q = query(collection(db, 'calendario'));
-        const unsub = onSnapshot(q, (calSnap) => {
-            const matches = calSnap.docs.map(d => {
-                const data = d.data();
-                return { 
-                    id: d.id, 
-                    equipoA: data.equipoLocalNombre || 'Local',
-                    equipoB: data.equipoVisitanteNombre || 'Visitante',
-                    fecha: data.fechaAsignada || '2025-01-01',
-                    hora: data.hora || '00:00',
-                    cancha: data.cancha || 'Por definir',
-                    categoria: data.categoria || 'General',
-                    rama: data.rama || 'Mixto',
-                    estatus: data.estatus || 'programado',
-                    resultadoA: data.marcadorLocal || 0,
-                    resultadoB: data.marcadorVisitante || 0,
-                    jornada: data.jornada || 1,
-                    // Se resolverá en render usando el cache
-                    logoUrlA: undefined, 
-                    logoUrlB: undefined  
-                } as Match;
-            });
-
-            // Ordenar: Jornada -> Fecha
-            matches.sort((a, b) => {
-                if ((a.jornada || 0) !== (b.jornada || 0)) return (a.jornada || 0) - (b.jornada || 0);
-                return a.fecha.localeCompare(b.fecha);
-            });
-
-            setPartidos(matches);
+        // 1. Cargar Partidos (Tiempo Real)
+        const q = query(collection(db, 'calendario'), orderBy('fechaAsignada', 'asc'));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Match));
+            setMatches(list);
             setLoading(false);
         });
-        return () => unsub();
+
+        // 2. Cargar Lobby de Equipos (VISIBLE PARA TODOS)
+        const fetchLobby = async () => {
+            try {
+                const qTeams = query(collection(db, 'forma21s'), where('estatus', '==', 'aprobado'));
+                const snap = await getDocs(qTeams);
+                setApprovedTeams(snap.docs.map(d => ({ id: d.id, ...d.data() } as ApprovedTeam)));
+            } catch (e) {
+                console.error("Error cargando equipos", e);
+            }
+        };
+        fetchLobby();
+
+        return () => unsubscribe();
     }, []);
 
-    // GENERAR CALENDARIO (ROUND ROBIN)
+    // --- FUNCIONES DE GESTIÓN (SOLO ADMIN) ---
+    
     const handleGenerateCalendar = async () => {
         if (!window.confirm("⚠️ ¿REINICIAR TORNEO?\n\nSe borrarán TODOS los partidos y stats.\n\nEsta acción no se puede deshacer.")) return;
         
@@ -102,10 +75,8 @@ const CalendarViewer: React.FC<{
             const equiposSnap = await getDocs(collection(db, 'equipos'));
             await Promise.all(equiposSnap.docs.map(d => updateDoc(d.ref, { victorias: 0, derrotas: 0, puntos: 0, puntos_favor: 0, puntos_contra: 0 })));
 
-            // Obtener equipos aprobados
-            const qAprobados = query(collection(db, 'equipos'), where('estatus', '==', 'aprobado'));
-            const approvedSnap = await getDocs(qAprobados);
-            let equipos = approvedSnap.docs.map((d: any) => ({ id: d.id, nombre: d.data().nombre }));
+            // Usar equipos aprobados cargados en el estado
+            let equipos = approvedTeams.map(t => ({ id: t.id, nombre: t.nombreEquipo }));
 
             if (equipos.length < 2) { 
                 alert("❌ No hay suficientes equipos APROBADOS. Aprueba al menos 2."); 
@@ -117,6 +88,7 @@ const CalendarViewer: React.FC<{
             const totalRounds = equipos.length - 1;
             const matchesPerRound = equipos.length / 2;
             let fechaBase = new Date();
+            // Próximo sábado
             fechaBase.setDate(fechaBase.getDate() + (6 - fechaBase.getDay() + 7) % 7); 
 
             for (let round = 0; round < totalRounds; round++) {
@@ -151,107 +123,180 @@ const CalendarViewer: React.FC<{
         await deleteDoc(doc(db, 'calendario', id));
     };
 
-    // FILTRADO
-    const liveMatches = partidos.filter(p => p.estatus === 'vivo').map(m => ({
-        ...m, logoUrlA: logosCache[m.equipoA], logoUrlB: logosCache[m.equipoB]
-    }));
-    
-    let listMatches = partidos.filter(p => p.estatus !== 'vivo').map(m => ({
-        ...m, logoUrlA: logosCache[m.equipoA], logoUrlB: logosCache[m.equipoB]
-    }));
+    const startEditing = (m: Match) => {
+        setEditingMatchId(m.id);
+        setEditDate(m.fechaAsignada);
+        setEditTime(m.hora);
+    };
 
-    if (filter === 'programados') listMatches = listMatches.filter(p => p.estatus !== 'finalizado');
-    else if (filter === 'finalizados') listMatches = listMatches.filter(p => p.estatus === 'finalizado');
+    const cancelEditing = () => {
+        setEditingMatchId(null);
+        setEditDate('');
+        setEditTime('');
+    };
 
-    const grouped: Record<string, Match[]> = {};
-    listMatches.forEach(m => {
-        const key = `Jornada ${m.jornada || 1}`;
-        if (!grouped[key]) grouped[key] = [];
-        grouped[key].push(m);
-    });
-
-    const sortedKeys = Object.keys(grouped).sort((a,b) => {
-        const numA = parseInt(a.replace('Jornada ', '')) || 0;
-        const numB = parseInt(b.replace('Jornada ', '')) || 0;
-        return numA - numB;
-    });
-
-    const renderLogo = (url?: string) => (
-        url ? <img src={url} alt="Logo" style={{width:'40px', height:'40px', borderRadius:'50%', objectFit:'cover', border:'1px solid #ddd', backgroundColor:'white'}} onError={(e)=>{(e.target as HTMLImageElement).src="https://cdn-icons-png.flaticon.com/512/166/166344.png"}} /> 
-            : <span style={{fontSize:'1.5rem'}}>🏀</span>
-    );
+    const saveEditing = async (id: string) => {
+        try {
+            await updateDoc(doc(db, 'calendario', id), {
+                fechaAsignada: editDate,
+                hora: editTime
+            });
+            alert("✅ Fecha y Hora actualizadas.");
+            setEditingMatchId(null);
+        } catch (error) {
+            console.error(error);
+            alert("Error al actualizar partido.");
+        }
+    };
 
     return (
-        <div className="animate-fade-in" style={{maxWidth:'800px', margin:'0 auto'}}>
-            
-            <div style={{display:'flex', justifyContent:'space-between', marginBottom:'20px', alignItems:'center'}}>
-                <h2 style={{color:'var(--primary)', margin:0, fontSize:'1.5rem'}}>📅 Calendario Oficial</h2>
-                <button onClick={onClose} className="btn btn-secondary">← Volver</button>
+        <div className="animate-fade-in" style={{
+            position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(243, 244, 246, 0.95)', 
+            display:'flex', flexDirection:'column', zIndex:1000, overflowY:'auto'
+        }}>
+            {/* HEADER */}
+            <div style={{
+                padding:'20px', background:'white', boxShadow:'0 2px 4px rgba(0,0,0,0.05)', 
+                display:'flex', justifyContent:'space-between', alignItems:'center', position:'sticky', top:0, zIndex:1001
+            }}>
+                <h2 style={{margin:0, color:'#1f2937'}}>📅 Calendario Oficial</h2>
+                <button onClick={onClose} className="btn btn-secondary">Cerrar</button>
             </div>
 
-            {rol === 'admin' && (
-                <div style={{background:'#fff7ed', padding:'15px', borderRadius:'8px', border:'1px solid #f59e0b', marginBottom:'20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                    <div><h4 style={{margin:'0 0 5px 0', color:'#d97706'}}>🛠️ Gestión del Torneo</h4><p style={{margin:0, fontSize:'0.8rem', color:'#666'}}>Generar cruces automáticos.</p></div>
-                    <button onClick={handleGenerateCalendar} disabled={generating} className="btn" style={{background: generating ? '#ccc' : '#ea580c', color: 'white', fontWeight: 'bold', fontSize: '0.85rem'}}>{generating ? 'Generando...' : '🔄 Generar Calendario'}</button>
-                </div>
-            )}
-
-            {liveMatches.length > 0 && (
-                <div style={{marginBottom:'30px'}}>
-                    <h3 style={{color:'#ef4444', marginBottom:'10px', display:'flex', alignItems:'center', gap:'10px', animation:'pulse 2s infinite'}}>🔴 EN JUEGO AHORA</h3>
-                    <div style={{display:'grid', gap:'15px'}}>
-                        {liveMatches.map(match => (
-                            <div key={match.id} className="card" style={{padding:'20px', background: 'linear-gradient(135deg, #111 0%, #222 100%)', color: 'white', border:'2px solid #ef4444', boxShadow: '0 0 15px rgba(239, 68, 68, 0.4)'}}>
-                                <div style={{textAlign:'center', marginBottom:'15px', fontSize:'0.9rem', color:'#fbbf24', fontWeight:'bold'}}>🔥 GAMECAST EN VIVO</div>
-                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px'}}>
-                                    <div style={{display:'flex', flexDirection:'column', alignItems:'center', flex:1}}>{renderLogo(match.logoUrlA)}<span style={{marginTop:'5px', fontWeight:'bold', textAlign:'center', fontSize:'1.1rem'}}>{match.equipoA}</span><span style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{match.resultadoA}</span></div>
-                                    <div style={{padding:'0 10px', fontSize:'1.2rem', color:'#666'}}>VS</div>
-                                    <div style={{display:'flex', flexDirection:'column', alignItems:'center', flex:1}}>{renderLogo(match.logoUrlB)}<span style={{marginTop:'5px', fontWeight:'bold', textAlign:'center', fontSize:'1.1rem'}}>{match.equipoB}</span><span style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{match.resultadoB}</span></div>
-                                </div>
-                                <button onClick={() => onViewLive(match.id)} className="btn" style={{width:'100%', background:'#ef4444', color:'white', fontWeight:'bold', padding:'12px', fontSize:'1rem', textTransform:'uppercase', display:'flex', justifyContent:'center', alignItems:'center', gap:'10px'}}>📺 Entrar a Transmisión</button>
-                            </div>
-                        ))}
+            <div style={{maxWidth:'1000px', margin:'20px auto', width:'95%'}}>
+                
+                {/* --- BOTÓN GENERAR (SOLO ADMIN) --- */}
+                {rol === 'admin' && (
+                    <div style={{background:'#fff7ed', padding:'15px', borderRadius:'8px', border:'1px solid #f59e0b', marginBottom:'20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                        <div><h4 style={{margin:'0 0 5px 0', color:'#d97706'}}>🛠️ Gestión del Torneo</h4><p style={{margin:0, fontSize:'0.8rem', color:'#666'}}>Generar cruces automáticos.</p></div>
+                        <button onClick={handleGenerateCalendar} disabled={generating} className="btn" style={{background: generating ? '#ccc' : '#ea580c', color: 'white', fontWeight: 'bold', fontSize: '0.85rem'}}>{generating ? 'Generando...' : '🔄 Generar Calendario'}</button>
                     </div>
-                </div>
-            )}
+                )}
 
-            <div style={{display:'flex', gap:'10px', marginBottom:'20px', overflowX:'auto', paddingBottom:'5px'}}>
-                <button className={`btn ${filter==='todos'?'btn-primary':'btn-secondary'}`} onClick={()=>setFilter('todos')}>Todos</button>
-                <button className={`btn ${filter==='programados'?'btn-primary':'btn-secondary'}`} onClick={()=>setFilter('programados')}>Pendientes</button>
-                <button className={`btn ${filter==='finalizados'?'btn-primary':'btn-secondary'}`} onClick={()=>setFilter('finalizados')}>Finalizados</button>
-            </div>
-
-            {loading ? <div style={{textAlign:'center', padding:'40px'}}>Cargando...</div> : 
-             (Object.keys(grouped).length === 0 && liveMatches.length === 0) ? (
-                 <div className="card" style={{textAlign:'center', padding:'30px', color:'#666'}}>No hay partidos programados.</div>
-             ) : (
-                sortedKeys.map(jornada => (
-                    <div key={jornada} style={{marginBottom:'30px'}}>
-                        <h3 style={{background: 'var(--primary)', color:'white', padding:'8px 15px', borderRadius:'8px', fontSize:'1rem', marginBottom:'10px'}}>{jornada}</h3>
-                        <div style={{display:'flex', flexDirection:'column', gap:'10px'}}>
-                            {grouped[jornada].map(match => (
-                                <div key={match.id} className="card match-card" style={{padding:'15px', display:'flex', flexDirection:'column', gap:'10px', borderLeft: match.estatus === 'finalizado' ? '5px solid #10b981' : '1px solid #eee'}}>
-                                    <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.8rem', color:'var(--text-muted)'}}>
-                                        <span>📍 {match.cancha} - {match.hora}</span>
-                                        {match.estatus === 'finalizado' && <span style={{color:'#10b981', fontWeight:'bold'}}>🏁 FINALIZADO</span>}
-                                        {match.estatus === 'programado' && <span>📅 PROGRAMADO</span>}
-                                    </div>
-                                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                                        <div style={{display:'flex', alignItems:'center', gap:'10px', flex:1}}>{renderLogo(match.logoUrlA)}<span style={{fontWeight:'bold', fontSize:'1rem', lineHeight: 1.2}}>{match.equipoA}</span></div>
-                                        <div style={{padding:'0 15px', fontWeight:'900', fontSize:'1.4rem', color:'var(--primary)', textAlign:'center', minWidth:'80px'}}>
-                                            {match.estatus === 'programado' ? <span style={{color:'#ccc', fontSize:'1rem'}}>VS</span> : <span>{match.resultadoA} - {match.resultadoB}</span>}
-                                        </div>
-                                        <div style={{display:'flex', alignItems:'center', gap:'10px', flex:1, justifyContent:'flex-end'}}><span style={{fontWeight:'bold', fontSize:'1rem', textAlign:'right', lineHeight: 1.2}}>{match.equipoB}</span>{renderLogo(match.logoUrlB)}</div>
-                                    </div>
-                                    {match.estatus === 'finalizado' && <div style={{display:'flex', marginTop:'5px', paddingTop:'10px', borderTop:'1px solid #eee', justifyContent:'flex-end'}}><button onClick={()=>onViewDetail(match.id)} className="btn btn-secondary" style={{padding:'5px 12px', fontSize:'0.8rem'}}>📊 Ver Stats</button></div>}
-                                    {rol === 'admin' && <div style={{textAlign:'right', marginTop:'5px'}}><button onClick={()=>handleDelete(match.id)} style={{background:'none', border:'none', cursor:'pointer', fontSize:'1.2rem', opacity:0.5}}>🗑️</button></div>}
+                {/* --- LOBBY DE EQUIPOS (VISIBLE PARA TODOS) --- */}
+                <div style={{marginBottom:'30px', background:'white', padding:'20px', borderRadius:'12px', boxShadow:'0 2px 10px rgba(0,0,0,0.05)', borderLeft:'5px solid #10b981'}}>
+                    <h3 style={{marginTop:0, color:'#065f46', display:'flex', alignItems:'center', gap:'10px'}}>
+                        📋 Equipos Confirmados <span style={{fontSize:'0.8rem', background:'#d1fae5', padding:'2px 8px', borderRadius:'10px'}}>{approvedTeams.length}</span>
+                    </h3>
+                    <p style={{fontSize:'0.9rem', color:'#666', marginBottom:'15px'}}>Equipos aprobados y listos para la competición.</p>
+                    
+                    {approvedTeams.length === 0 ? (
+                        <div style={{color:'#999', fontStyle:'italic'}}>No hay equipos aprobados aún.</div>
+                    ) : (
+                        <div style={{display:'flex', flexWrap:'wrap', gap:'10px'}}>
+                            {approvedTeams.map(team => (
+                                <div key={team.id} style={{
+                                    padding:'8px 15px', background:'#f0fdf4', border:'1px solid #bbf7d0', 
+                                    borderRadius:'20px', fontWeight:'bold', color:'#166534', fontSize:'0.9rem',
+                                    display:'flex', alignItems:'center', gap:'8px'
+                                }}>
+                                    ✅ {team.nombreEquipo}
                                 </div>
                             ))}
                         </div>
+                    )}
+                </div>
+
+                {/* --- LISTA DE PARTIDOS --- */}
+                <h3 style={{color:'#374151', borderBottom:'2px solid #e5e7eb', paddingBottom:'10px'}}>Próximos Juegos</h3>
+                
+                {loading ? <div style={{textAlign:'center'}}>Cargando calendario...</div> : (
+                    <div style={{display:'grid', gap:'15px'}}>
+                        {matches.length === 0 && <div style={{textAlign:'center', padding:'40px', color:'#999'}}>No hay partidos programados.</div>}
+                        
+                        {matches.map(m => {
+                            const isEditing = editingMatchId === m.id;
+                            const isLive = m.estatus === 'vivo';
+                            const isFinished = m.estatus === 'finalizado';
+
+                            return (
+                                <div key={m.id} className="card" style={{
+                                    display:'flex', flexDirection:'column', gap:'10px', 
+                                    borderLeft: isLive ? '5px solid #ef4444' : (isFinished ? '5px solid #6b7280' : '5px solid #3b82f6')
+                                }}>
+                                    {/* CABECERA: FECHA, HORA Y STATUS */}
+                                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:'10px'}}>
+                                        
+                                        {/* SI ESTAMOS EDITANDO (SOLO ADMIN) */}
+                                        {isEditing ? (
+                                            <div style={{display:'flex', gap:'10px', flexWrap:'wrap', background:'#eff6ff', padding:'10px', borderRadius:'8px', width:'100%'}}>
+                                                <div style={{display:'flex', flexDirection:'column'}}>
+                                                    <label style={{fontSize:'0.7rem', fontWeight:'bold'}}>Fecha:</label>
+                                                    <input type="date" value={editDate} onChange={e=>setEditDate(e.target.value)} style={{padding:'5px'}} />
+                                                </div>
+                                                <div style={{display:'flex', flexDirection:'column'}}>
+                                                    <label style={{fontSize:'0.7rem', fontWeight:'bold'}}>Hora:</label>
+                                                    <input type="time" value={editTime} onChange={e=>setEditTime(e.target.value)} style={{padding:'5px'}} />
+                                                </div>
+                                                <div style={{display:'flex', gap:'5px', alignItems:'flex-end'}}>
+                                                    <button onClick={() => saveEditing(m.id)} className="btn btn-primary" style={{padding:'5px 10px', fontSize:'0.8rem'}}>💾 Guardar</button>
+                                                    <button onClick={cancelEditing} className="btn btn-secondary" style={{padding:'5px 10px', fontSize:'0.8rem'}}>Cancelar</button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            /* VISTA NORMAL */
+                                            <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+                                                <div style={{fontSize:'0.9rem', color:'#6b7280', fontWeight:'bold'}}>
+                                                    📅 {m.fechaAsignada} &nbsp; ⏰ {m.hora}
+                                                </div>
+                                                {rol === 'admin' && !isFinished && !isLive && (
+                                                    <button 
+                                                        onClick={() => startEditing(m)}
+                                                        style={{background:'none', border:'none', cursor:'pointer', fontSize:'1rem'}}
+                                                        title="Editar Fecha/Hora"
+                                                    >
+                                                        ✏️
+                                                    </button>
+                                                )}
+                                                {rol === 'admin' && (
+                                                    <button onClick={()=>handleDelete(m.id)} style={{background:'none', border:'none', cursor:'pointer', opacity:0.5}} title="Eliminar Partido">🗑️</button>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* ETIQUETA DE ESTADO */}
+                                        <div>
+                                            {isLive && <span style={{background:'#ef4444', color:'white', padding:'4px 10px', borderRadius:'20px', fontSize:'0.8rem', fontWeight:'bold', animation:'pulse 1.5s infinite'}}>🔴 EN VIVO</span>}
+                                            {isFinished && <span style={{background:'#374151', color:'white', padding:'4px 10px', borderRadius:'20px', fontSize:'0.8rem', fontWeight:'bold'}}>FINALIZADO</span>}
+                                            {m.estatus === 'programado' && <span style={{background:'#dbeafe', color:'#1e40af', padding:'4px 10px', borderRadius:'20px', fontSize:'0.8rem', fontWeight:'bold'}}>PROGRAMADO</span>}
+                                        </div>
+                                    </div>
+
+                                    {/* EQUIPOS Y MARCADOR */}
+                                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0'}}>
+                                        <div style={{textAlign:'center', flex:1}}>
+                                            <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{m.equipoLocalNombre}</div>
+                                            {(isLive || isFinished) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorLocal}</div>}
+                                        </div>
+                                        
+                                        <div style={{fontWeight:'bold', color:'#9ca3af', fontSize:'1.5rem'}}>VS</div>
+                                        
+                                        <div style={{textAlign:'center', flex:1}}>
+                                            <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{m.equipoVisitanteNombre}</div>
+                                            {(isLive || isFinished) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorVisitante}</div>}
+                                        </div>
+                                    </div>
+
+                                    {/* BOTONES DE ACCIÓN (VER DETALLES O VER EN VIVO) */}
+                                    {isLive && (
+                                        <button onClick={() => onViewLive(m.id)} className="btn" style={{width:'100%', background:'#ef4444', color:'white', border:'none'}}>
+                                            📺 Ver Partido en Vivo
+                                        </button>
+                                    )}
+                                    
+                                    {isFinished && (
+                                        <button onClick={() => onViewDetail(m.id)} className="btn btn-secondary" style={{width:'100%'}}>
+                                            📊 Ver Estadísticas Finales
+                                        </button>
+                                    )}
+                                </div>
+                            );
+                        })}
                     </div>
-                ))
-            )}
+                )}
+            </div>
         </div>
     );
 };
+
 export default CalendarViewer;
