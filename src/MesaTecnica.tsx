@@ -1,19 +1,17 @@
 import React, { useState, useEffect, memo, useCallback } from 'react';
 import { db } from './firebase';
-import { doc, updateDoc, onSnapshot, collection, query, getDocs, setDoc, increment, deleteDoc, where, addDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot, collection, query, getDocs, setDoc, increment, deleteDoc, where, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 
-// --- INTERFACES ---
+// --- INTERFACES (INTACTAS) ---
 interface Player { id: string; nombre: string; numero: number; equipoId: string; }
 interface Staff { entrenador: string; asistente: string; expulsado?: boolean; faltasTecnicas?: number; }
 
-// Modificamos GameEvent para guardar DATOS para poder borrarlos luego
 interface GameEvent { 
     id: string; 
     text: string; 
     time: string; 
     team: 'local'|'visitante'|'system'; 
     type: 'score'|'stat'|'foul'|'sub'|'period'|'timeout'|'system'; 
-    // Campos para reversión (Importantes para el botón X)
     playerId?: string;
     action?: string;
     val?: number;
@@ -36,9 +34,12 @@ interface MatchData {
     faltasLocal: number; faltasVisitante: number;
     tiemposLocal: number; tiemposVisitante: number;
     gameLog?: GameEvent[];
+    fechaAsignada?: string; 
+    hora?: string; 
+    cancha?: string; 
 }
 
-// --- 1. VISUALIZADOR DE PERIODO (SIN RELOJ) ---
+// --- 1. VISUALIZADOR DE PERIODO (INTACTO) ---
 const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: number, estatus: string, onNextQuarter: () => void }) => {
     const getPeriodoLabel = (p: number) => p <= 4 ? `CUARTO ${p}` : `PRÓRROGA ${p - 4}`;
 
@@ -57,14 +58,11 @@ const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: numb
     );
 });
 
-// --- 2. FILA DE JUGADOR ---
+// --- 2. FILA DE JUGADOR (INTACTO) ---
 const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCaptain }: any) => {
-    // Protección contra undefined para evitar pantalla blanca
     const safeStats = stats || { faltasTotales: 0, expulsado: false };
     const isExpulsado = safeStats.expulsado;
     const faltas = safeStats.faltasTotales;
-    
-    // Si está expulsado, bloqueamos clics salvo para sustitución
     const isBlocked = isExpulsado && !isSubTarget;
 
     return (
@@ -93,15 +91,10 @@ const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCap
             </div>
             {!isSubTarget && !isExpulsado && (
                 <div style={{display:'flex', gap:'2px', justifyContent:'space-between', marginTop:'2px'}}>
-                    {/* PUNTOS */}
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 1)}} className="btn-stat" style={{background:'#1d4ed8'}}>+1</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 2)}} className="btn-stat" style={{background:'#1d4ed8'}}>+2</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'puntos', 3)}} className="btn-stat" style={{background:'#1d4ed8'}}>+3</button>
-                    
-                    {/* REBOTE UNIFICADO */}
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'rebote', 1)}} className="btn-stat" style={{background:'#059669', fontSize:'0.65rem', flex: 2}} title="Rebote">REB</button>
-                    
-                    {/* FALTAS */}
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_P', 0)}} className="btn-stat" style={{background:'#dc2626', color:'white'}}>P</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_T', 0)}} className="btn-stat" style={{background:'#be123c', color:'white'}}>T</button>
                     <button onClick={(e)=>{e.stopPropagation(); onStat(player, team, 'falta_U', 0)}} className="btn-stat" style={{background:'#991b1b', color:'white'}}>U</button>
@@ -113,9 +106,8 @@ const PlayerRow = memo(({ player, team, stats, isSubTarget, onStat, onSub, isCap
     );
 });
 
-// --- 3. FILA DE STAFF (DT) ---
+// --- 3. FILA DE STAFF (INTACTO) ---
 const StaffRow = memo(({ staff, team, onAction }: any) => {
-    // Si no hay staff o nombre, mostrar placeholder seguro
     const s = staff || {};
     const entrenadorNombre = s.entrenador || 'Sin DT Asignado';
     const asistenteNombre = s.asistente || '';
@@ -140,10 +132,16 @@ const StaffRow = memo(({ staff, team, onAction }: any) => {
     );
 });
 
+// --- COMPONENTE PRINCIPAL ---
 const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void }> = ({ onClose, onMatchFinalized }) => {
+    // --- ESTADO ---
     const [matches, setMatches] = useState<any[]>([]);
     const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
     const [matchData, setMatchData] = useState<MatchData | null>(null);
+    
+    // FILTROS
+    const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+    const [viewAll, setViewAll] = useState(false); // NUEVO ESTADO PARA VER TODO
     
     const [localOnCourt, setLocalOnCourt] = useState<Player[]>([]);
     const [localBench, setLocalBench] = useState<Player[]>([]);
@@ -151,24 +149,68 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const [visitanteBench, setVisitanteBench] = useState<Player[]>([]);
     const [captains, setCaptains] = useState<{local: string|null, visitante: string|null}>({ local: null, visitante: null });
     const [statsCache, setStatsCache] = useState<Record<string, PlayerGameStats>>({});
-    
-    // Estado local para Staff (Cache)
     const [staffCache, setStaffCache] = useState<{local: Staff, visitante: Staff}>({ local: {entrenador:'', asistente:''}, visitante: {entrenador:'', asistente:''} });
-
     const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
     const [benchModalOpen, setBenchModalOpen] = useState<'local' | 'visitante' | null>(null);
 
-    // 1. CARGAR PARTIDOS
+    // 1. CARGAR PARTIDOS CON LOGICA "VER TODO"
     useEffect(() => {
         const fetchMatches = async () => {
-            const q = query(collection(db, 'calendario'), where('estatus', 'in', ['programado', 'vivo']));
-            const snap = await getDocs(q);
-            setMatches(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        };
-        if (!selectedMatchId) fetchMatches();
-    }, [selectedMatchId]);
+            let q;
+            if (viewAll) {
+                // SI "VER TODOS" ESTÁ ACTIVO: Ignoramos fecha, mostramos todo lo pendiente/vivo
+                q = query(
+                    collection(db, 'calendario'), 
+                    where('estatus', '!=', 'finalizado'),
+                    orderBy('estatus'), // Esto agrupa 'vivo' y 'programado'
+                    orderBy('fechaAsignada', 'asc'),
+                    orderBy('hora', 'asc')
+                );
+            } else {
+                // SI NO: Filtramos estrictamente por la fecha seleccionada
+                q = query(
+                    collection(db, 'calendario'), 
+                    where('fechaAsignada', '==', selectedDate),
+                    orderBy('hora', 'asc')
+                );
+            }
 
-    // 2. ESCUCHAR DATOS DEL PARTIDO
+            try {
+                const snap = await getDocs(q);
+                // Filtrado extra en cliente por si acaso (para asegurar orden)
+                let list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                
+                // Si vemos todos, ordenamos para que los VIVOS salgan primero
+                if (viewAll) {
+                    list.sort((a: any, b: any) => {
+                        if (a.estatus === 'vivo' && b.estatus !== 'vivo') return -1;
+                        if (b.estatus === 'vivo' && a.estatus !== 'vivo') return 1;
+                        return a.fechaAsignada.localeCompare(b.fechaAsignada);
+                    });
+                }
+                setMatches(list);
+            } catch (error) {
+                console.error("Error cargando partidos:", error);
+                // Fallback simple si el índice falla
+                const qFallback = query(collection(db, 'calendario'), orderBy('fechaAsignada'));
+                const snapF = await getDocs(qFallback);
+                const listF = snapF.docs.map(d => ({ id: d.id, ...d.data() } as any));
+                
+                if (viewAll) {
+                    setMatches(listF.filter(m => m.estatus !== 'finalizado'));
+                } else {
+                    setMatches(listF.filter(m => m.fechaAsignada === selectedDate));
+                }
+            }
+        };
+        
+        if (!selectedMatchId) fetchMatches();
+    }, [selectedMatchId, selectedDate, viewAll]); // Dependencias actualizadas
+
+    // ... (RESTO DE LOGICA DE JUEGO, STATS, CAMBIOS, STAFF SE MANTIENE IGUAL) ...
+    // ... [Omitido para no repetir 500 líneas, es idéntico a lo anterior] ...
+    
+    // 2. ESCUCHAR DATOS DEL PARTIDO (INTACTO)
     useEffect(() => {
         if (!selectedMatchId) return;
         const unsub = onSnapshot(doc(db, 'calendario', selectedMatchId), (docSnap) => {
@@ -188,7 +230,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         return () => unsub();
     }, [selectedMatchId]);
 
-    // Sincronizar Staff cuando cambie matchData (AQUÍ ESTÁ LA CLAVE PARA QUE SE VEA EL NOMBRE)
+    // Sincronizar Staff
     useEffect(() => {
         if (matchData) {
             setStaffCache({
@@ -198,7 +240,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         }
     }, [matchData?.staffLocal, matchData?.staffVisitante]);
 
-    // 3. INICIALIZAR ROSTERS
+    // INICIALIZAR ROSTERS
     useEffect(() => {
         if (matchData) {
             if (localOnCourt.length === 0 && localBench.length === 0) {
@@ -364,7 +406,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await setDoc(statRef, payload, { merge: true });
     }, [matchData, statsCache]);
 
-    // --- STAFF ACTIONS (DT) ---
+    // --- STAFF ACTIONS (DT)
     const handleStaffAction = async (team: 'local'|'visitante', action: 'falta_T'|'falta_D') => {
         if (!matchData) return;
         const currentStaff = (team === 'local' ? staffCache.local : staffCache.visitante) || { entrenador: '' };
@@ -388,7 +430,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await addLog(logText, 'foul', team, undefined, action);
     };
 
-    // --- CAMBIOS ---
+    // --- CAMBIOS
     const confirmSubstitution = (playerOut: Player) => {
         if (!subMode) return;
         if (subMode.team === 'local') {
@@ -443,7 +485,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         alert("Reiniciado.");
     };
 
-    // --- TIMEOUTS ---
     const handleTimeoutAdjustment = async (team: 'local'|'visitante', change: number) => {
         if (!matchData) return;
         const current = team === 'local' ? matchData.tiemposLocal : matchData.tiemposVisitante;
@@ -463,16 +504,87 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await updateDoc(doc(db, 'calendario', matchData.id), updates);
     };
 
+    // --- 4. RENDERIZADO DE LA LISTA DE PARTIDOS (MODIFICADO AQUÍ) ---
     if (!selectedMatchId) return (
-        <div className="animate-fade-in" style={{padding:'40px', maxWidth:'800px', margin:'0 auto'}}>
-            <h2 style={{color:'var(--primary)'}}>📡 Mesa Técnica Pro FIBA</h2>
-            <div style={{display:'grid', gap:'15px'}}>
-                {matches.map(m => (
-                    <div key={m.id} onClick={() => setSelectedMatchId(m.id)} className="card" style={{cursor:'pointer', borderLeft: m.estatus==='vivo'?'5px solid red':'5px solid blue', display:'flex', justifyContent:'space-between'}}>
-                        <strong>{m.equipoLocalNombre} vs {m.equipoVisitanteNombre}</strong>
-                        <span>{m.estatus === 'vivo' ? '🔴 EN VIVO' : '📅 PROGRAMADO'}</span>
+        <div className="animate-fade-in" style={{padding:'20px', maxWidth:'800px', margin:'0 auto'}}>
+            <h2 style={{color:'var(--primary)', marginBottom:'10px'}}>📡 Mesa Técnica Pro FIBA</h2>
+            
+            {/* FILTROS DE FECHA Y VER TODO */}
+            <div style={{marginBottom:'20px', background:'white', padding:'15px', borderRadius:'8px', display:'flex', flexWrap:'wrap', alignItems:'center', gap:'15px', boxShadow:'0 2px 5px rgba(0,0,0,0.05)'}}>
+                
+                {/* CHECKBOX PARA VER TODO */}
+                <label style={{display:'flex', alignItems:'center', gap:'8px', fontWeight:'bold', cursor:'pointer', background: viewAll ? '#e0f2fe' : 'transparent', padding:'5px 10px', borderRadius:'6px'}}>
+                    <input type="checkbox" checked={viewAll} onChange={e => setViewAll(e.target.checked)} />
+                    Ver Todos los Programados
+                </label>
+
+                {/* SELECTOR DE FECHA (Solo visible si no estamos viendo todos) */}
+                {!viewAll && (
+                    <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
+                        <label style={{fontWeight:'bold'}}>Fecha específica:</label>
+                        <input 
+                            type="date" 
+                            value={selectedDate} 
+                            onChange={(e) => setSelectedDate(e.target.value)}
+                            style={{padding:'5px', borderRadius:'4px', border:'1px solid #ccc'}}
+                        />
                     </div>
-                ))}
+                )}
+            </div>
+
+            <div style={{display:'grid', gap:'15px'}}>
+                {matches.length === 0 && <div style={{textAlign:'center', padding:'30px', color:'#666', background:'white', borderRadius:'12px'}}>No hay partidos encontrados.</div>}
+                
+                {matches.map(m => {
+                    // VALIDACIÓN DE FORMA 5
+                    const forma5Local = m.forma5?.[m.equipoLocalId]?.jugadores?.length >= 5;
+                    const forma5Visitante = m.forma5?.[m.equipoVisitanteId]?.jugadores?.length >= 5;
+                    const isReady = forma5Local && forma5Visitante;
+                    const isLive = m.estatus === 'vivo';
+
+                    return (
+                        <div key={m.id} className="card" style={{padding:'15px', borderLeft: isLive ? '5px solid red' : (isReady ? '5px solid #10b981' : '5px solid #f59e0b')}}>
+                            <div style={{display:'flex', justifyContent:'space-between', marginBottom:'10px'}}>
+                                <div style={{fontWeight:'bold', color:'#333'}}>
+                                    {m.equipoLocalNombre} vs {m.equipoVisitanteNombre}
+                                </div>
+                                <div style={{fontSize:'0.9rem', color:'#666'}}>
+                                    {viewAll && <span style={{marginRight:'10px'}}>📅 {m.fechaAsignada}</span>}
+                                    ⏰ {m.hora} | 📍 {m.cancha}
+                                </div>
+                            </div>
+
+                            {/* ESTADO DE ALINEACIONES */}
+                            <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.8rem', marginBottom:'15px', background:'#f9fafb', padding:'5px', borderRadius:'4px'}}>
+                                <div>
+                                    {m.equipoLocalNombre}: {forma5Local ? <span style={{color:'green', fontWeight:'bold'}}>✅ LISTO</span> : <span style={{color:'red', fontWeight:'bold'}}>❌ FALTAN</span>}
+                                </div>
+                                <div>
+                                    {m.equipoVisitanteNombre}: {forma5Visitante ? <span style={{color:'green', fontWeight:'bold'}}>✅ LISTO</span> : <span style={{color:'red', fontWeight:'bold'}}>❌ FALTAN</span>}
+                                </div>
+                            </div>
+
+                            {/* BOTÓN DE ACCIÓN */}
+                            {m.estatus === 'finalizado' ? (
+                                <button disabled className="btn btn-secondary" style={{width:'100%'}}>PARTIDO FINALIZADO</button>
+                            ) : (
+                                <button 
+                                    onClick={() => setSelectedMatchId(m.id)} 
+                                    disabled={!isReady && !isLive}
+                                    className="btn"
+                                    style={{
+                                        width:'100%', 
+                                        background: isLive ? '#dc2626' : (isReady ? '#1f2937' : '#e5e7eb'), 
+                                        color: isReady || isLive ? 'white' : '#9ca3af',
+                                        cursor: isReady || isLive ? 'pointer' : 'not-allowed'
+                                    }}
+                                >
+                                    {isLive ? '🔴 CONTINUAR JUEGO' : (isReady ? '🏀 GESTIONAR PARTIDO' : '⏳ ESPERANDO ALINEACIONES')}
+                                </button>
+                            )}
+                        </div>
+                    );
+                })}
             </div>
             <button onClick={onClose} className="btn btn-secondary" style={{marginTop:'20px'}}>Salir</button>
         </div>
@@ -480,6 +592,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
     if (!matchData) return <div style={{padding:'50px', color:'white'}}>Cargando...</div>;
 
+    // --- 5. RENDERIZADO DEL JUEGO (INTACTO) ---
     return (
         <div style={{background:'#121212', height:'100vh', color:'white', display:'flex', flexDirection:'column', overflow:'hidden'}}>
             <style>{`.btn-stat { flex:1; padding:6px 0; font-size:0.75rem; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#2563eb; color:white; transition: opacity 0.1s; }.btn-stat:active { transform:scale(0.95); opacity:0.8; }.clock-btn { background:#333; color:white; border:1px solid #555; padding:4px 8px; cursor:pointer; font-size:0.75rem; border-radius:3px; font-weight:bold; backdrop-filter: blur(4px); background: rgba(50,50,50,0.8); }.bonus-indicator { font-size: 0.8rem; background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-top: 5px; animation: pulse 2s infinite; display:inline-block; box-shadow: 0 0 10px #ef4444; }.timeout-btn { background: #d97706; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; cursor: pointer; margin-top: 5px; display: block; width: 100%; transition: background 0.2s; }.timeout-btn:disabled { background: #555; color: #999; cursor: not-allowed; }`}</style>
