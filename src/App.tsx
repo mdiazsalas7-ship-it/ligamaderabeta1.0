@@ -1,8 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
 import './App.css'; 
-import { db, auth } from './firebase'; 
+// ✅ MODIFICADO: Agregamos 'messaging' a la importación
+import { db, auth, messaging } from './firebase'; 
 import { collection, getDocs, doc, onSnapshot, query, where, limit, orderBy, updateDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth'; 
+// ✅ MODIFICADO: Importamos getToken para las notificaciones
+import { getToken } from 'firebase/messaging';
 import type { DocumentData } from 'firebase/firestore'; 
 
 // Importaciones de Componentes
@@ -99,7 +102,40 @@ function App() {
     setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false);
   };
   
-  // Notificaciones
+  // 1. LÓGICA DE NOTIFICACIONES PUSH (FCM)
+  useEffect(() => {
+    const requestNotificationPermission = async () => {
+      // Solo ejecutamos si hay usuario logueado y messaging está soportado/inicializado
+      if (!user || !messaging) return;
+
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission === 'granted') {
+          // Obtener el Token único de este dispositivo
+          const token = await getToken(messaging, {
+            // ⚠️ IMPORTANTE: PEGA AQUÍ TU CLAVE VAPID DE LA CONSOLA DE FIREBASE
+            vapidKey: "TU_CLAVE_VAPID_AQUI" 
+          });
+          
+          if (token) {
+            console.log("Token FCM generado:", token);
+            // Guardamos el token en el perfil del usuario en Firestore
+            await updateDoc(doc(db, 'usuarios', user.uid), {
+              fcmToken: token
+            });
+          }
+        }
+      } catch (error) {
+        console.log("Error configurando notificaciones:", error);
+      }
+    };
+
+    if (user) {
+      requestNotificationPermission();
+    }
+  }, [user]); // Se ejecuta cuando el usuario inicia sesión
+
+  // Notificaciones Locales (Existente)
   useEffect(() => {
     if ('Notification' in window && Notification.permission !== 'granted') {
         Notification.requestPermission();
