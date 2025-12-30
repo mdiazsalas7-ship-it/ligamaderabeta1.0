@@ -141,7 +141,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     
     // FILTROS
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-    const [viewAll, setViewAll] = useState(false); // NUEVO ESTADO PARA VER TODO
+    const [viewAll, setViewAll] = useState(false); 
     
     const [localOnCourt, setLocalOnCourt] = useState<Player[]>([]);
     const [localBench, setLocalBench] = useState<Player[]>([]);
@@ -153,34 +153,19 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
     const [benchModalOpen, setBenchModalOpen] = useState<'local' | 'visitante' | null>(null);
 
-    // 1. CARGAR PARTIDOS CON LOGICA "VER TODO"
+    // 1. CARGAR PARTIDOS
     useEffect(() => {
         const fetchMatches = async () => {
             let q;
             if (viewAll) {
-                // SI "VER TODOS" ESTÁ ACTIVO: Ignoramos fecha, mostramos todo lo pendiente/vivo
-                q = query(
-                    collection(db, 'calendario'), 
-                    where('estatus', '!=', 'finalizado'),
-                    orderBy('estatus'), // Esto agrupa 'vivo' y 'programado'
-                    orderBy('fechaAsignada', 'asc'),
-                    orderBy('hora', 'asc')
-                );
+                q = query(collection(db, 'calendario'), where('estatus', '!=', 'finalizado'), orderBy('estatus'), orderBy('fechaAsignada', 'asc'), orderBy('hora', 'asc'));
             } else {
-                // SI NO: Filtramos estrictamente por la fecha seleccionada
-                q = query(
-                    collection(db, 'calendario'), 
-                    where('fechaAsignada', '==', selectedDate),
-                    orderBy('hora', 'asc')
-                );
+                q = query(collection(db, 'calendario'), where('fechaAsignada', '==', selectedDate), orderBy('hora', 'asc'));
             }
 
             try {
                 const snap = await getDocs(q);
-                // Filtrado extra en cliente por si acaso (para asegurar orden)
                 let list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                
-                // Si vemos todos, ordenamos para que los VIVOS salgan primero
                 if (viewAll) {
                     list.sort((a: any, b: any) => {
                         if (a.estatus === 'vivo' && b.estatus !== 'vivo') return -1;
@@ -191,26 +176,17 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 setMatches(list);
             } catch (error) {
                 console.error("Error cargando partidos:", error);
-                // Fallback simple si el índice falla
                 const qFallback = query(collection(db, 'calendario'), orderBy('fechaAsignada'));
                 const snapF = await getDocs(qFallback);
                 const listF = snapF.docs.map(d => ({ id: d.id, ...d.data() } as any));
-                
-                if (viewAll) {
-                    setMatches(listF.filter(m => m.estatus !== 'finalizado'));
-                } else {
-                    setMatches(listF.filter(m => m.fechaAsignada === selectedDate));
-                }
+                if (viewAll) setMatches(listF.filter(m => m.estatus !== 'finalizado'));
+                else setMatches(listF.filter(m => m.fechaAsignada === selectedDate));
             }
         };
-        
         if (!selectedMatchId) fetchMatches();
-    }, [selectedMatchId, selectedDate, viewAll]); // Dependencias actualizadas
+    }, [selectedMatchId, selectedDate, viewAll]);
 
-    // ... (RESTO DE LOGICA DE JUEGO, STATS, CAMBIOS, STAFF SE MANTIENE IGUAL) ...
-    // ... [Omitido para no repetir 500 líneas, es idéntico a lo anterior] ...
-    
-    // 2. ESCUCHAR DATOS DEL PARTIDO (INTACTO)
+    // 2. ESCUCHAR DATOS
     useEffect(() => {
         if (!selectedMatchId) return;
         const unsub = onSnapshot(doc(db, 'calendario', selectedMatchId), (docSnap) => {
@@ -218,8 +194,8 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 const data = docSnap.data() as any;
                 setMatchData({
                     id: docSnap.id, ...data,
-                    tiemposLocal: data.tiemposLocal ?? 2,
-                    tiemposVisitante: data.tiemposVisitante ?? 2,
+                    tiemposLocal: typeof data.tiemposLocal === 'number' ? data.tiemposLocal : 2, // DEFAULT ROBUSTO
+                    tiemposVisitante: typeof data.tiemposVisitante === 'number' ? data.tiemposVisitante : 2, // DEFAULT ROBUSTO
                     staffLocal: data.staffLocal || {entrenador:'', asistente:''},
                     staffVisitante: data.staffVisitante || {entrenador:'', asistente:''},
                     forma5: data.forma5 || {},
@@ -230,7 +206,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         return () => unsub();
     }, [selectedMatchId]);
 
-    // Sincronizar Staff
     useEffect(() => {
         if (matchData) {
             setStaffCache({
@@ -240,7 +215,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         }
     }, [matchData?.staffLocal, matchData?.staffVisitante]);
 
-    // INICIALIZAR ROSTERS
     useEffect(() => {
         if (matchData) {
             if (localOnCourt.length === 0 && localBench.length === 0) {
@@ -249,10 +223,8 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     let players: Player[] = [];
                     if (Array.isArray(forma5Data)) players = forma5Data;
                     else if (forma5Data.jugadores) players = forma5Data.jugadores;
-                    
                     let starters = forma5Data.startersIds || players.slice(0, 5).map(p => p.id);
                     let captain = forma5Data.captainId || null;
-                    
                     return {
                         court: players.filter(p => starters.includes(p.id)),
                         bench: players.filter(p => !starters.includes(p.id)),
@@ -261,17 +233,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 };
                 const l = processTeam(matchData.forma5?.[matchData.equipoLocalId]);
                 const v = processTeam(matchData.forma5?.[matchData.equipoVisitanteId]);
-                
                 setLocalOnCourt(l.court); setLocalBench(l.bench);
                 setVisitanteOnCourt(v.court); setVisitanteBench(v.bench);
                 setCaptains({ local: l.captainId, visitante: v.captainId });
 
                 const cache: Record<string, PlayerGameStats> = {};
-                [...l.court, ...l.bench, ...v.court, ...v.bench].forEach(p => {
-                    cache[p.id] = { puntos: 0, faltasPersonales: 0, faltasTecnicas: 0, faltasAntideportivas: 0, faltasDescalificantes: 0, faltasTotales: 0, expulsado: false };
-                });
+                [...l.court, ...l.bench, ...v.court, ...v.bench].forEach(p => { cache[p.id] = { puntos: 0, faltasPersonales: 0, faltasTecnicas: 0, faltasAntideportivas: 0, faltasDescalificantes: 0, faltasTotales: 0, expulsado: false }; });
                 setStatsCache(cache);
-                
                 const loadRealStats = async () => {
                     const qStats = query(collection(db, 'stats_partido'), where('partidoId', '==', matchData.id));
                     const snapStats = await getDocs(qStats);
@@ -301,10 +269,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
     const addLog = async (text: string, type: GameEvent['type'], team: 'local'|'visitante'|'system', playerId?: string, action?: string, val?: number) => {
         if (!matchData) return;
-        const newEvent: GameEvent = { 
-            id: Date.now().toString(), text, time: formatTimeForLog(), team, type, 
-            playerId, action, val
-        };
+        const newEvent: GameEvent = { id: Date.now().toString(), text, time: formatTimeForLog(), team, type, playerId, action, val };
         const newLog = [newEvent, ...(matchData.gameLog || [])].slice(0, 50);
         await updateDoc(doc(db, 'calendario', matchData.id), { gameLog: newLog });
     };
@@ -312,43 +277,25 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const handleDeleteLog = async (logId: string) => {
         if (!matchData) return;
         const logEntry = matchData.gameLog?.find(l => l.id === logId);
-        if (!logEntry) return;
-        if (!window.confirm("¿Eliminar registro?")) return;
-
+        if (!logEntry || !window.confirm("¿Eliminar registro?")) return;
         try {
             const updates: any = { gameLog: matchData.gameLog?.filter(l => l.id !== logId) };
             if (logEntry.action === 'puntos' && logEntry.val) updates[logEntry.team === 'local' ? 'marcadorLocal' : 'marcadorVisitante'] = increment(-logEntry.val);
             if (logEntry.action?.startsWith('falta')) updates[logEntry.team === 'local' ? 'faltasLocal' : 'faltasVisitante'] = increment(-1);
-            if (logEntry.type === 'timeout') updates[logEntry.team === 'local' ? 'tiemposLocal' : 'tiemposVisitante'] = increment(1);
-
+            if (logEntry.type === 'timeout') updates[logEntry.team === 'local' ? 'tiemposLocal' : 'tiemposVisitante'] = increment(1); // Devolver el tiempo muerto
             await updateDoc(doc(db, 'calendario', matchData.id), updates);
-
             if (logEntry.playerId && logEntry.action) {
                 const statRef = doc(db, 'stats_partido', `${matchData.id}_${logEntry.playerId}`);
                 const statUpdates: any = {};
-                
-                if (logEntry.action === 'puntos') {
-                    statUpdates.puntos = increment(-logEntry.val!);
-                    if (logEntry.val === 3) statUpdates.triples = increment(-1);
-                } else if (logEntry.action === 'rebote') {
-                    statUpdates.rebotes = increment(-1);
-                } else if (logEntry.action.startsWith('falta')) {
-                    statUpdates.faltasTotales = increment(-1);
-                    if (logEntry.action === 'falta_P') statUpdates.faltasPersonales = increment(-1);
-                    if (logEntry.action === 'falta_T') statUpdates.faltasTecnicas = increment(-1);
-                    if (logEntry.action === 'falta_U') statUpdates.faltasAntideportivas = increment(-1);
-                    if (logEntry.action === 'falta_D') statUpdates.faltasDescalificantes = increment(-1);
-                }
-
+                if (logEntry.action === 'puntos') { statUpdates.puntos = increment(-logEntry.val!); if (logEntry.val === 3) statUpdates.triples = increment(-1); }
+                else if (logEntry.action === 'rebote') { statUpdates.rebotes = increment(-1); }
+                else if (logEntry.action.startsWith('falta')) { statUpdates.faltasTotales = increment(-1); }
                 if (Object.keys(statUpdates).length > 0) {
                     await setDoc(statRef, statUpdates, { merge: true });
                     setStatsCache(prev => {
                         const pStats = { ...prev[logEntry.playerId!] };
                         if (logEntry.action === 'puntos') pStats.puntos -= logEntry.val!;
-                        if (logEntry.action?.startsWith('falta')) {
-                            pStats.faltasTotales -= 1;
-                            if (pStats.faltasTotales < 5) pStats.expulsado = false; 
-                        }
+                        if (logEntry.action?.startsWith('falta')) { pStats.faltasTotales -= 1; if (pStats.faltasTotales < 5) pStats.expulsado = false; }
                         return { ...prev, [logEntry.playerId!]: pStats };
                     });
                 }
@@ -357,15 +304,12 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     };
 
     const handleStat = useCallback(async (player: Player, team: 'local'|'visitante', action: 'puntos'|'rebote'|'falta_P'|'falta_T'|'falta_U'|'falta_D', val: number) => {
-        if (!matchData || statsCache[player.id]?.expulsado) return; 
-        
+        if (!matchData || statsCache[player.id]?.expulsado) return;
         if (matchData.estatus === 'programado') updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo' });
-
         const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
         const currentStats = statsCache[player.id] || { puntos:0, faltasPersonales:0, faltasTecnicas:0, faltasAntideportivas:0, faltasDescalificantes:0, faltasTotales:0, expulsado:false };
         let newStats = { ...currentStats };
         let logText = '';
-
         if (action === 'puntos') {
             newStats.puntos += val;
             logText = `🏀 ${player.nombre} (+${val})`;
@@ -376,88 +320,55 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             const field = team === 'local' ? 'faltasLocal' : 'faltasVisitante';
             await updateDoc(doc(db, 'calendario', matchData.id), { [field]: increment(1) });
             if (action === 'falta_P') { newStats.faltasPersonales++; logText = `🤜 P: ${player.nombre}`; }
-            if (action === 'falta_T') { newStats.faltasTecnicas++; logText = `⚠️ T: ${player.nombre}`; }
-            if (action === 'falta_U') { newStats.faltasAntideportivas++; logText = `🛑 U: ${player.nombre}`; }
-            if (action === 'falta_D') { newStats.faltasDescalificantes++; logText = `⛔ D: ${player.nombre}`; }
-
-            if (newStats.faltasTotales >= 5 || newStats.faltasTecnicas >= 2 || newStats.faltasAntideportivas >= 2 || newStats.faltasDescalificantes >= 1) {
-                logText += " (EXPULSADO)";
-                newStats.expulsado = true;
-                alert(`🟥 EXPULSIÓN: ${player.nombre}`);
-            }
-        } else {
-            logText = `🖐️ Rebote: ${player.nombre}`;
-        }
-
+            else if (action === 'falta_T') { newStats.faltasTecnicas++; logText = `⚠️ T: ${player.nombre}`; }
+            else if (action === 'falta_U') { newStats.faltasAntideportivas++; logText = `🛑 U: ${player.nombre}`; }
+            else if (action === 'falta_D') { newStats.faltasDescalificantes++; logText = `⛔ D: ${player.nombre}`; }
+            if (newStats.faltasTotales >= 5 || newStats.faltasTecnicas >= 2 || newStats.faltasAntideportivas >= 2 || newStats.faltasDescalificantes >= 1) { logText += " (EXPULSADO)"; newStats.expulsado = true; alert(`🟥 EXPULSIÓN: ${player.nombre}`); }
+        } else { logText = `🖐️ Rebote: ${player.nombre}`; }
         setStatsCache(prev => ({ ...prev, [player.id]: newStats }));
         await addLog(logText, action.startsWith('falta') ? 'foul' : action === 'puntos' ? 'score' : 'stat', team, player.id, action, val);
-        
         const statRef = doc(db, 'stats_partido', `${matchData.id}_${player.id}`);
         const payload: any = { partidoId: matchData.id, jugadorId: player.id, nombre: player.nombre, equipo: teamName, fecha: new Date().toISOString() };
         if (action === 'puntos') { payload.puntos = increment(val); if(val===3) payload.triples = increment(1); }
         if (action === 'rebote') payload.rebotes = increment(1);
-        if (action.startsWith('falta')) {
-            payload.faltasTotales = increment(1);
-            if(action === 'falta_P') payload.faltasPersonales = increment(1);
-            if(action === 'falta_T') payload.faltasTecnicas = increment(1);
-            if(action === 'falta_U') payload.faltasAntideportivas = increment(1);
-            if(action === 'falta_D') payload.faltasDescalificantes = increment(1);
-        }
+        if (action.startsWith('falta')) payload.faltasTotales = increment(1);
         await setDoc(statRef, payload, { merge: true });
     }, [matchData, statsCache]);
 
-    // --- STAFF ACTIONS (DT)
     const handleStaffAction = async (team: 'local'|'visitante', action: 'falta_T'|'falta_D') => {
         if (!matchData) return;
         const currentStaff = (team === 'local' ? staffCache.local : staffCache.visitante) || { entrenador: '' };
         if (!currentStaff.entrenador) return alert("No hay DT registrado");
-        
         if (matchData.estatus === 'programado') updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo' });
-
         let logText = `⚠️ T (Banca): ${currentStaff.entrenador}`;
         if (action === 'falta_D') logText = `⛔ D (Banca): ${currentStaff.entrenador}`;
-
         const newStaffState = { ...currentStaff };
         if (action === 'falta_T') newStaffState.faltasTecnicas = (newStaffState.faltasTecnicas || 0) + 1;
         if (action === 'falta_D') newStaffState.expulsado = true;
         if ((newStaffState.faltasTecnicas || 0) >= 2) newStaffState.expulsado = true;
-
         setStaffCache(prev => ({ ...prev, [team]: newStaffState }));
         const staffField = team === 'local' ? 'staffLocal' : 'staffVisitante';
         const fieldFouls = team === 'local' ? 'faltasLocal' : 'faltasVisitante';
-        
         await updateDoc(doc(db, 'calendario', matchData.id), { [staffField]: newStaffState, [fieldFouls]: increment(1) });
         await addLog(logText, 'foul', team, undefined, action);
     };
 
-    // --- CAMBIOS
     const confirmSubstitution = (playerOut: Player) => {
         if (!subMode) return;
-        if (subMode.team === 'local') {
-            setLocalOnCourt(prev => [...prev.filter(p => p.id !== playerOut.id), subMode.playerIn]);
-            setLocalBench(prev => [...prev.filter(p => p.id !== subMode.playerIn.id), playerOut]);
-        } else {
-            setVisitanteOnCourt(prev => [...prev.filter(p => p.id !== playerOut.id), subMode.playerIn]);
-            setVisitanteBench(prev => [...prev.filter(p => p.id !== subMode.playerIn.id), playerOut]);
-        }
+        if (subMode.team === 'local') { setLocalOnCourt(prev => [...prev.filter(p => p.id !== playerOut.id), subMode.playerIn]); setLocalBench(prev => [...prev.filter(p => p.id !== subMode.playerIn.id), playerOut]); } 
+        else { setVisitanteOnCourt(prev => [...prev.filter(p => p.id !== playerOut.id), subMode.playerIn]); setVisitanteBench(prev => [...prev.filter(p => p.id !== subMode.playerIn.id), playerOut]); }
         addLog(`🔄 Cambio: Sale ${playerOut.nombre}, Entra ${subMode.playerIn.nombre}`, 'sub', subMode.team);
         setSubMode(null);
     };
 
     const handleNextQuarter = async () => {
         if (!matchData) return;
-        if (matchData.estatus === 'programado') {
-            await updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo', cuarto: 1 });
-            addLog("📢 INICIO DEL PARTIDO", 'system', 'system');
-            return;
-        }
+        if (matchData.estatus === 'programado') { await updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo', cuarto: 1 }); addLog("📢 INICIO DEL PARTIDO", 'system', 'system'); return; }
         if (!window.confirm(`¿Iniciar Siguiente Periodo?`)) return;
-        
         let updatePayload: any = { cuarto: increment(1), faltasLocal: 0, faltasVisitante: 0 };
         const nextQ = matchData.cuarto + 1;
         if (nextQ === 3) { updatePayload.tiemposLocal = 3; updatePayload.tiemposVisitante = 3; } 
         else if (nextQ > 4) { updatePayload.tiemposLocal = 1; updatePayload.tiemposVisitante = 1; }
-        
         await updateDoc(doc(db, 'calendario', matchData.id), updatePayload);
         addLog(`🕒 Inicio del Periodo ${nextQ}`, 'period', 'system');
     };
@@ -485,9 +396,14 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         alert("Reiniciado.");
     };
 
+    // --- CORRECCIÓN TIMEOUTS (LÓGICA BLINDADA) ---
     const handleTimeoutAdjustment = async (team: 'local'|'visitante', change: number) => {
         if (!matchData) return;
-        const current = team === 'local' ? matchData.tiemposLocal : matchData.tiemposVisitante;
+        
+        // Obtener valor actual asegurando que sea número
+        const current = team === 'local' ? (matchData.tiemposLocal ?? 0) : (matchData.tiemposVisitante ?? 0);
+        
+        // --- BLOQUEO ESTRICTO: Si voy a restar y ya es 0, NO HAGO NADA ---
         if (change < 0 && current <= 0) return;
 
         const field = team === 'local' ? 'tiemposLocal' : 'tiemposVisitante';
@@ -495,93 +411,45 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
         const updates: any = { [field]: increment(change) };
         if (change < 0) {
-            const newEvent: GameEvent = {
-                id: Date.now().toString(), text: `🛑 TIEMPO MUERTO: ${teamName}`, 
-                time: formatTimeForLog(), team, type: 'timeout', action: 'timeout'
-            };
+            const newEvent: GameEvent = { id: Date.now().toString(), text: `🛑 TIEMPO MUERTO: ${teamName}`, time: formatTimeForLog(), team, type: 'timeout', action: 'timeout' };
             updates.gameLog = [newEvent, ...(matchData.gameLog || [])];
         } 
         await updateDoc(doc(db, 'calendario', matchData.id), updates);
     };
 
-    // --- 4. RENDERIZADO DE LA LISTA DE PARTIDOS (MODIFICADO AQUÍ) ---
     if (!selectedMatchId) return (
         <div className="animate-fade-in" style={{padding:'20px', maxWidth:'800px', margin:'0 auto'}}>
             <h2 style={{color:'var(--primary)', marginBottom:'10px'}}>📡 Mesa Técnica Pro FIBA</h2>
-            
-            {/* FILTROS DE FECHA Y VER TODO */}
             <div style={{marginBottom:'20px', background:'white', padding:'15px', borderRadius:'8px', display:'flex', flexWrap:'wrap', alignItems:'center', gap:'15px', boxShadow:'0 2px 5px rgba(0,0,0,0.05)'}}>
-                
-                {/* CHECKBOX PARA VER TODO */}
                 <label style={{display:'flex', alignItems:'center', gap:'8px', fontWeight:'bold', cursor:'pointer', background: viewAll ? '#e0f2fe' : 'transparent', padding:'5px 10px', borderRadius:'6px'}}>
                     <input type="checkbox" checked={viewAll} onChange={e => setViewAll(e.target.checked)} />
                     Ver Todos los Programados
                 </label>
-
-                {/* SELECTOR DE FECHA (Solo visible si no estamos viendo todos) */}
                 {!viewAll && (
                     <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
                         <label style={{fontWeight:'bold'}}>Fecha específica:</label>
-                        <input 
-                            type="date" 
-                            value={selectedDate} 
-                            onChange={(e) => setSelectedDate(e.target.value)}
-                            style={{padding:'5px', borderRadius:'4px', border:'1px solid #ccc'}}
-                        />
+                        <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{padding:'5px', borderRadius:'4px', border:'1px solid #ccc'}} />
                     </div>
                 )}
             </div>
-
             <div style={{display:'grid', gap:'15px'}}>
                 {matches.length === 0 && <div style={{textAlign:'center', padding:'30px', color:'#666', background:'white', borderRadius:'12px'}}>No hay partidos encontrados.</div>}
-                
                 {matches.map(m => {
-                    // VALIDACIÓN DE FORMA 5
                     const forma5Local = m.forma5?.[m.equipoLocalId]?.jugadores?.length >= 5;
                     const forma5Visitante = m.forma5?.[m.equipoVisitanteId]?.jugadores?.length >= 5;
                     const isReady = forma5Local && forma5Visitante;
                     const isLive = m.estatus === 'vivo';
-
                     return (
                         <div key={m.id} className="card" style={{padding:'15px', borderLeft: isLive ? '5px solid red' : (isReady ? '5px solid #10b981' : '5px solid #f59e0b')}}>
                             <div style={{display:'flex', justifyContent:'space-between', marginBottom:'10px'}}>
-                                <div style={{fontWeight:'bold', color:'#333'}}>
-                                    {m.equipoLocalNombre} vs {m.equipoVisitanteNombre}
-                                </div>
-                                <div style={{fontSize:'0.9rem', color:'#666'}}>
-                                    {viewAll && <span style={{marginRight:'10px'}}>📅 {m.fechaAsignada}</span>}
-                                    ⏰ {m.hora} | 📍 {m.cancha}
-                                </div>
+                                <div style={{fontWeight:'bold', color:'#333'}}>{m.equipoLocalNombre} vs {m.equipoVisitanteNombre}</div>
+                                <div style={{fontSize:'0.9rem', color:'#666'}}>{viewAll && <span style={{marginRight:'10px'}}>📅 {m.fechaAsignada}</span>}⏰ {m.hora} | 📍 {m.cancha}</div>
                             </div>
-
-                            {/* ESTADO DE ALINEACIONES */}
                             <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.8rem', marginBottom:'15px', background:'#f9fafb', padding:'5px', borderRadius:'4px'}}>
-                                <div>
-                                    {m.equipoLocalNombre}: {forma5Local ? <span style={{color:'green', fontWeight:'bold'}}>✅ LISTO</span> : <span style={{color:'red', fontWeight:'bold'}}>❌ FALTAN</span>}
-                                </div>
-                                <div>
-                                    {m.equipoVisitanteNombre}: {forma5Visitante ? <span style={{color:'green', fontWeight:'bold'}}>✅ LISTO</span> : <span style={{color:'red', fontWeight:'bold'}}>❌ FALTAN</span>}
-                                </div>
+                                <div>{m.equipoLocalNombre}: {forma5Local ? <span style={{color:'green', fontWeight:'bold'}}>✅ LISTO</span> : <span style={{color:'red', fontWeight:'bold'}}>❌ FALTAN</span>}</div>
+                                <div>{m.equipoVisitanteNombre}: {forma5Visitante ? <span style={{color:'green', fontWeight:'bold'}}>✅ LISTO</span> : <span style={{color:'red', fontWeight:'bold'}}>❌ FALTAN</span>}</div>
                             </div>
-
-                            {/* BOTÓN DE ACCIÓN */}
-                            {m.estatus === 'finalizado' ? (
-                                <button disabled className="btn btn-secondary" style={{width:'100%'}}>PARTIDO FINALIZADO</button>
-                            ) : (
-                                <button 
-                                    onClick={() => setSelectedMatchId(m.id)} 
-                                    disabled={!isReady && !isLive}
-                                    className="btn"
-                                    style={{
-                                        width:'100%', 
-                                        background: isLive ? '#dc2626' : (isReady ? '#1f2937' : '#e5e7eb'), 
-                                        color: isReady || isLive ? 'white' : '#9ca3af',
-                                        cursor: isReady || isLive ? 'pointer' : 'not-allowed'
-                                    }}
-                                >
-                                    {isLive ? '🔴 CONTINUAR JUEGO' : (isReady ? '🏀 GESTIONAR PARTIDO' : '⏳ ESPERANDO ALINEACIONES')}
-                                </button>
-                            )}
+                            {m.estatus === 'finalizado' ? ( <button disabled className="btn btn-secondary" style={{width:'100%'}}>PARTIDO FINALIZADO</button> ) : ( <button onClick={() => setSelectedMatchId(m.id)} disabled={!isReady && !isLive} className="btn" style={{width:'100%', background: isLive ? '#dc2626' : (isReady ? '#1f2937' : '#e5e7eb'), color: isReady || isLive ? 'white' : '#9ca3af', cursor: isReady || isLive ? 'pointer' : 'not-allowed'}}>{isLive ? '🔴 CONTINUAR JUEGO' : (isReady ? '🏀 GESTIONAR PARTIDO' : '⏳ ESPERANDO ALINEACIONES')}</button> )}
                         </div>
                     );
                 })}
@@ -592,7 +460,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
     if (!matchData) return <div style={{padding:'50px', color:'white'}}>Cargando...</div>;
 
-    // --- 5. RENDERIZADO DEL JUEGO (INTACTO) ---
     return (
         <div style={{background:'#121212', height:'100vh', color:'white', display:'flex', flexDirection:'column', overflow:'hidden'}}>
             <style>{`.btn-stat { flex:1; padding:6px 0; font-size:0.75rem; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#2563eb; color:white; transition: opacity 0.1s; }.btn-stat:active { transform:scale(0.95); opacity:0.8; }.clock-btn { background:#333; color:white; border:1px solid #555; padding:4px 8px; cursor:pointer; font-size:0.75rem; border-radius:3px; font-weight:bold; backdrop-filter: blur(4px); background: rgba(50,50,50,0.8); }.bonus-indicator { font-size: 0.8rem; background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-top: 5px; animation: pulse 2s infinite; display:inline-block; box-shadow: 0 0 10px #ef4444; }.timeout-btn { background: #d97706; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; cursor: pointer; margin-top: 5px; display: block; width: 100%; transition: background 0.2s; }.timeout-btn:disabled { background: #555; color: #999; cursor: not-allowed; }`}</style>
