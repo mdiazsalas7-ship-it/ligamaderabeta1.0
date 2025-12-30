@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
 
-interface Player { id: string; nombre: string; numero: number; cedula?: string; }
+interface Player { id: string; nombre: string; numero: number; cedula?: string; suspendido?: boolean; }
 interface Staff { entrenador: string; asistente: string; }
 
 const Forma5Selector: React.FC<{ 
@@ -88,20 +88,26 @@ const Forma5Selector: React.FC<{
         loadData();
     }, [calendarioId, equipoId]);
 
-    const togglePlayer = (id: string) => {
+    const togglePlayer = (player: Player) => {
         if (isLocked) return;
 
-        if (selectedIds.includes(id)) {
+        // --- BLOQUEO POR SUSPENSIÓN ---
+        if (player.suspendido) {
+            alert(`⛔ El jugador ${player.nombre} está SUSPENDIDO y no puede ser seleccionado.`);
+            return;
+        }
+
+        if (selectedIds.includes(player.id)) {
             // Si lo deselecciona, debe dejar de ser capitán o abridor si lo era
-            setSelectedIds(prev => prev.filter(pid => pid !== id));
-            setStartersIds(prev => prev.filter(pid => pid !== id));
-            if (captainId === id) setCaptainId(null);
+            setSelectedIds(prev => prev.filter(pid => pid !== player.id));
+            setStartersIds(prev => prev.filter(pid => pid !== player.id));
+            if (captainId === player.id) setCaptainId(null);
         } else {
             if (selectedIds.length >= 12) {
                 alert("⚠️ Máximo 12 jugadores permitidos.");
                 return;
             }
-            setSelectedIds(prev => [...prev, id]);
+            setSelectedIds(prev => [...prev, player.id]);
         }
     };
     
@@ -298,30 +304,36 @@ const Forma5Selector: React.FC<{
                         const isSelected = selectedIds.includes(p.id);
                         const isStarter = startersIds.includes(p.id);
                         const isCaptain = captainId === p.id;
+                        const isSuspended = p.suspendido === true; // Detectar suspensión
 
                         return (
                             <div key={p.id} style={{
                                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                padding: '12px', borderRadius: '8px', cursor: 'pointer', marginBottom:'8px',
-                                border: isSelected ? '2px solid var(--primary)' : '1px solid #e5e7eb',
-                                background: isSelected ? '#eff6ff' : 'white',
-                                opacity: isSelected ? 1 : 0.6
+                                padding: '12px', borderRadius: '8px', cursor: isSuspended ? 'not-allowed' : 'pointer', marginBottom:'8px',
+                                border: isSuspended ? '2px solid #ef4444' : (isSelected ? '2px solid var(--primary)' : '1px solid #e5e7eb'),
+                                background: isSuspended ? '#fef2f2' : (isSelected ? '#eff6ff' : 'white'),
+                                opacity: isSuspended ? 0.6 : (isSelected ? 1 : 0.8)
                             }}>
                                 {/* INFO */}
-                                <div onClick={() => togglePlayer(p.id)} style={{display: 'flex', alignItems: 'center', gap: '15px', flex:1}}>
+                                <div onClick={() => togglePlayer(p)} style={{display: 'flex', alignItems: 'center', gap: '15px', flex:1}}>
                                     <div style={{
                                         width: '30px', height: '30px', borderRadius: '50%', 
-                                        background: isSelected ? 'var(--primary)' : '#e5e7eb',
-                                        color: isSelected ? 'white' : '#6b7280',
+                                        background: isSuspended ? '#ef4444' : (isSelected ? 'var(--primary)' : '#e5e7eb'),
+                                        color: isSuspended ? 'white' : (isSelected ? 'white' : '#6b7280'),
                                         display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold'
                                     }}>
                                         {p.numero}
                                     </div>
-                                    <span style={{fontWeight: isSelected ? 'bold' : 'normal', color: '#1f2937'}}>{p.nombre}</span>
+                                    <div style={{display:'flex', flexDirection:'column'}}>
+                                        <span style={{fontWeight: isSelected ? 'bold' : 'normal', color: isSuspended ? '#991b1b' : '#1f2937'}}>
+                                            {p.nombre}
+                                        </span>
+                                        {isSuspended && <span style={{fontSize:'0.65rem', color:'#ef4444', fontWeight:'bold'}}>🚫 SUSPENDIDO</span>}
+                                    </div>
                                 </div>
                                 
-                                {/* CONTROLES DE ROL */}
-                                {isSelected && (
+                                {/* CONTROLES DE ROL (Solo si seleccionado y NO suspendido) */}
+                                {isSelected && !isSuspended && (
                                     <div style={{display:'flex', gap:'5px'}}>
                                         <button 
                                             onClick={() => toggleCaptain(p.id)}
@@ -350,8 +362,8 @@ const Forma5Selector: React.FC<{
                                 )}
                                 
                                 {/* INDICADOR DE SELECCIÓN GENERAL */}
-                                <div onClick={() => togglePlayer(p.id)} style={{fontSize: '1.2rem', color: isSelected ? 'var(--primary)' : '#d1d5db', marginLeft:'10px'}}>
-                                    {isSelected ? '☑️' : '⬜'}
+                                <div onClick={() => togglePlayer(p)} style={{fontSize: '1.2rem', color: isSuspended ? '#ef4444' : (isSelected ? 'var(--primary)' : '#d1d5db'), marginLeft:'10px'}}>
+                                    {isSuspended ? '🚫' : (isSelected ? '☑️' : '⬜')}
                                 </div>
                             </div>
                         );
