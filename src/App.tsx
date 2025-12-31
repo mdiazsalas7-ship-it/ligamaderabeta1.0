@@ -1,10 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import './App.css'; 
-// ✅ MODIFICADO: Agregamos 'messaging' a la importación
 import { db, auth, messaging } from './firebase'; 
 import { collection, getDocs, doc, onSnapshot, query, where, limit, orderBy, updateDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth'; 
-// ✅ MODIFICADO: Importamos getToken para las notificaciones
 import { getToken } from 'firebase/messaging';
 import type { DocumentData } from 'firebase/firestore'; 
 
@@ -113,8 +111,8 @@ function App() {
         if (permission === 'granted') {
           // Obtener el Token único de este dispositivo
           const token = await getToken(messaging, {
-            // ⚠️ IMPORTANTE: PEGA AQUÍ TU CLAVE VAPID DE LA CONSOLA DE FIREBASE
-            vapidKey: "TU_CLAVE_VAPID_AQUI" 
+            // ✅ CLAVE VAPID REAL INTEGRADA AQUÍ 👇
+            vapidKey: "BCIo9OadymsSrPl7ByiJ-MFXyunwbesFbKOw8ZTOaVRQInFVbTzQgfHSZaJx05vfdUZZZsv9XLdCKxtdvg3LNkg" 
           });
           
           if (token) {
@@ -133,7 +131,7 @@ function App() {
     if (user) {
       requestNotificationPermission();
     }
-  }, [user]); // Se ejecuta cuando el usuario inicia sesión
+  }, [user]); 
 
   // Notificaciones Locales (Existente)
   useEffect(() => {
@@ -282,7 +280,6 @@ function App() {
   if (user.rol === 'pendiente') {
       return (
         <div className="login-wrapper" style={{
-            // AQUÍ ESTÁ LA NUEVA IMAGEN DE FONDO PARA LA PANTALLA DE REGISTRO
             backgroundImage: 'url(https://i.postimg.cc/W11GDbLn/madera15.jpg)',
             backgroundSize: 'cover',
             backgroundPosition: 'center',
@@ -295,7 +292,6 @@ function App() {
             {registroView ? (
                 <RegistroForma21 onSuccess={handleDelegadoSuccess} onClose={() => setRegistroView(false)} />
             ) : (
-                // Caja blanca semitransparente para que el texto se lea bien sobre el fondo
                 <div className="login-box" style={{textAlign:'center', maxWidth:'450px', background:'rgba(255, 255, 255, 0.95)', padding:'30px', borderRadius:'15px', boxShadow:'0 10px 25px rgba(0,0,0,0.5)'}}>
                     <h2 style={{color:'#1f2937', marginBottom:'10px'}}>👋 Bienvenido</h2>
                     <p style={{color:'#666', marginBottom:'25px'}}>Selecciona cómo deseas participar:</p>
