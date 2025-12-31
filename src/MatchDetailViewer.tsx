@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { doc, getDoc, collection, setDoc, getDocs, query, where } from 'firebase/firestore';
-import { generarActaPDF } from './ActaGenerator'; // <--- 1. IMPORTANTE: AGREGAR ESTO
+import { generarActaPDF } from './ActaGenerator'; // <--- Importamos el generador
 
 interface PlayerStat {
     playerId: string;
@@ -179,9 +179,9 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                         </div>
                     </div>
 
-                    {/* --- 2. BOTÓN DE DESCARGA PDF --- */}
+                    {/* --- BOTÓN DE DESCARGA PDF CORREGIDO --- */}
                     <button 
-                        onClick={() => generarActaPDF(match)}
+                        onClick={() => generarActaPDF(match, statsA, statsB)} 
                         style={{
                             marginTop: '20px', background: '#ef4444', color: 'white', border: 'none', 
                             padding: '10px 20px', borderRadius: '20px', cursor: 'pointer', 
@@ -191,7 +191,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                     >
                         📄 Descargar Acta Oficial
                     </button>
-                    {/* -------------------------------- */}
+                    {/* ------------------------------------- */}
 
                 </div>
 
