@@ -1,77 +1,81 @@
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 
-// --- FUNCIÓN FUERTE PARA DESCARGAR IMAGEN ---
-// Usamos un proxy para saltarnos el bloqueo de seguridad del navegador
-const obtenerImagenLogo = async (urlOriginal: string): Promise<string> => {
-  try {
-    // Truco: Usamos corsproxy.io para obligar la descarga
-    const urlProxy = `https://corsproxy.io/?${encodeURIComponent(urlOriginal)}`;
+// Función para cargar la imagen asegurando que no falle por seguridad (CORS)
+const obtenerImagenLogo = (url: string): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'Anonymous'; // Permite que el navegador descargue la imagen externa
+    img.src = url;
     
-    const response = await fetch(urlProxy);
-    if (!response.ok) throw new Error("Error red");
-    
-    const blob = await response.blob();
-    
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.readAsDataURL(blob);
-    });
-  } catch (e) {
-    console.error("Falló la carga del logo:", e);
-    return ""; // Si falla, devuelve vacío para no romper el PDF
-  }
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0);
+        try {
+            // Intentamos convertirla. Si falla por seguridad, devolverá cadena vacía.
+            resolve(canvas.toDataURL('image/jpeg')); 
+        } catch (err) {
+            console.warn("Error de seguridad CORS al procesar logo");
+            resolve("");
+        }
+      } else {
+        resolve("");
+      }
+    };
+
+    img.onerror = () => {
+      // Si la URL está mal (como pasaba antes con los guiones), entra aquí.
+      console.warn("No se encontró la imagen en la URL dada.");
+      resolve("");
+    };
+  });
 };
 
 export const generarActaPDF = async (partido: any, statsLocal: any[], statsVisitante: any[]) => {
   const doc = new jsPDF();
   
   // ---------------------------------------------------------
-  // 1. LOGO E IMAGEN
+  // 1. ENCABEZADO Y LOGO (CORREGIDO)
   // ---------------------------------------------------------
   
   // Fondo Rojo Cabecera
   doc.setFillColor(185, 28, 28);
   doc.rect(0, 0, 210, 40, 'F');
   
-  // Fondo circular blanco (por si la imagen tiene transparencia)
+  // Fondo circular blanco
   doc.setFillColor(255, 255, 255);
-  doc.circle(25, 20, 13, 'F'); 
+  doc.circle(25, 20, 13, 'F');
 
-  // --- INTENTO DE CARGA DEL LOGO ---
   try {
-    // TU LOGO NUEVO
-    const logoUrl = "https://i.postimg.cc/sDgyKfr4/nuevo_logo.png";
+    // --- AQUÍ ESTABA EL ERROR: URL CORREGIDA (Con guiones bajos) ---
+    const logoUrl = "https://i.postimg.cc/Hx1t81vH/FORMA_21_MORICHAL.jpg";
+    
+    // Esperamos a que cargue
     const imgData = await obtenerImagenLogo(logoUrl);
 
     if (imgData) {
       doc.saveGraphicsState();
-      
-      // Creamos la máscara de recorte circular
       doc.beginPath();
-      doc.arc(25, 20, 13, 0, 2 * Math.PI, false);
+      doc.arc(25, 20, 13, 0, 2 * Math.PI, false); // Recorte circular
       doc.clip(); 
-      
-      // Dibujamos la imagen (Ajustada para que entre en el círculo)
-      // x:12, y:7, ancho:26, alto:26
-      doc.addImage(imgData, "PNG", 12, 7, 26, 26); 
-      
+      doc.addImage(imgData, "JPEG", 12, 7, 26, 26); 
       doc.restoreGraphicsState();
     }
     
-    // Borde blanco encima para que se vea limpio
+    // Borde blanco decorativo
     doc.setDrawColor(255, 255, 255);
-    doc.setLineWidth(0.8);
+    doc.setLineWidth(0.5);
     doc.circle(25, 20, 13, 'S');
 
   } catch (e) {
-    // Si falla todo, al menos se ve el círculo blanco
+    console.log("Error al poner el logo:", e);
   }
 
-  // ---------------------------------------------------------
-  // 2. TEXTOS DE CABECERA
-  // ---------------------------------------------------------
+  // Textos
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(22);
   doc.setFont('helvetica', 'bold');
@@ -83,8 +87,9 @@ export const generarActaPDF = async (partido: any, statsLocal: any[], statsVisit
   doc.text(`Fecha: ${new Date().toLocaleDateString()} | Cancha: ${partido.cancha || 'Principal'}`, 55, 32);
 
   // ---------------------------------------------------------
-  // 3. MARCADOR Y EQUIPOS
+  // 2. MARCADOR Y DATOS
   // ---------------------------------------------------------
+
   doc.setTextColor(0, 0, 0);
   doc.setFontSize(14);
   doc.text("RESULTADO FINAL", 105, 55, { align: "center" });
@@ -98,7 +103,7 @@ export const generarActaPDF = async (partido: any, statsLocal: any[], statsVisit
   doc.text(partido.equipoVisitanteNombre, 150, 75, { align: "center" });
 
   // ---------------------------------------------------------
-  // 4. TABLA DE CUARTOS (Datos automáticos + Manuales)
+  // 3. TABLA DE CUARTOS
   // ---------------------------------------------------------
   const valQ = (val: any) => val ? parseInt(val) : 0;
   const c = partido.cuartos || {};
@@ -122,8 +127,9 @@ export const generarActaPDF = async (partido: any, statsLocal: any[], statsVisit
   });
 
   // ---------------------------------------------------------
-  // 5. ESTADÍSTICAS
+  // 4. ESTADÍSTICAS
   // ---------------------------------------------------------
+  
   const finalY = (doc as any).lastAutoTable.finalY + 10;
   doc.setFontSize(10);
   doc.text("ESTADÍSTICAS INDIVIDUALES", 105, finalY, { align: 'center' });
@@ -179,9 +185,6 @@ export const generarActaPDF = async (partido: any, statsLocal: any[], statsVisit
     didParseCell: (data: any) => { if(data.section==='body' && data.row.index===filasVisitante.length-1) { data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[220,220,220]; } }
   });
 
-  // ---------------------------------------------------------
-  // 6. FIRMAS Y GUARDADO
-  // ---------------------------------------------------------
   const tableEnd = (doc as any).lastAutoTable.finalY;
   const firmaY = tableEnd + 25;
   doc.setLineWidth(0.5);
