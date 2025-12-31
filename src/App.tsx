@@ -100,7 +100,6 @@ function App() {
     setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false);
   };
 
-  // Función visual para mostrar notificaciones (usada por FCM)
   const sendNotification = (title: string, body: string, icon = 'https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg') => {
       if ('Notification' in window && Notification.permission === 'granted') {
           try {
@@ -111,62 +110,62 @@ function App() {
       }
   };
   
-  // 1. LÓGICA DE NOTIFICACIONES PUSH (FCM)
+  // 1. OBTENER TOKEN (Cédula Digital)
   useEffect(() => {
-    const setupNotifications = async () => {
+    const getTokenFCM = async () => {
       if (!user || !messaging) return;
-
       try {
         const permission = await Notification.requestPermission();
         if (permission === 'granted') {
-          // A. Obtener Token
           const token = await getToken(messaging, {
             vapidKey: "BCIo9OadymsSrPl7ByiJ-MFXyunwbesFbKOw8ZTOaVRQInFVbTzQgfHSZaJx05vfdUZZZsv9XLdCKxtdvg3LNkg" 
           });
-          
           if (token) {
             console.log("Token FCM:", token);
             await updateDoc(doc(db, 'usuarios', user.uid), { fcmToken: token });
           }
-
-          // B. Escuchar mensajes en PRIMER PLANO
-          onMessage(messaging, (payload) => {
-            console.log('Mensaje en primer plano:', payload);
-            const titulo = payload.notification?.title || "¡Nueva Notificación!";
-            const cuerpo = payload.notification?.body || "Revisa la app para más detalles.";
-            // Solo mostramos esta, la de Firebase
-            sendNotification(titulo, cuerpo);
-          });
         }
       } catch (error) {
-        console.log("Error notificaciones:", error);
+        console.log("Error Token:", error);
       }
     };
-
-    if (user) {
-      setupNotifications();
-    }
+    if (user) getTokenFCM();
   }, [user]); 
 
-  // Detector Cambios en Vivo (Snapshot) - YA SIN NOTIFICACIONES LOCALES
+  // 2. ESCUCHAR MENSAJES (Corrección de duplicados)
+  useEffect(() => {
+    if (!user || !messaging) return;
+
+    // Activamos el "oído" para escuchar mensajes
+    const unsubscribe = onMessage(messaging, (payload) => {
+        console.log('Mensaje FCM recibido:', payload);
+        const titulo = payload.notification?.title || "¡Nueva Notificación!";
+        const cuerpo = payload.notification?.body || "Revisa la app para más detalles.";
+        sendNotification(titulo, cuerpo);
+    });
+
+    // Esta línea es mágica: Limpia el "oído" anterior si la app se recarga
+    return () => {
+        unsubscribe();
+    };
+  }, [user]);
+
+  // Detector Cambios en Vivo (Solo actualiza datos, NO notifica)
   useEffect(() => {
       const qMatches = query(collection(db, 'calendario')); 
       const unsubMatches = onSnapshot(qMatches, (snap) => {
           const lives = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => m.estatus === 'vivo');
           setLiveMatches(lives);
 
-          // ✅ CORRECCIÓN: Quitamos el sendNotification de aquí para que no se duplique con el Push
           if (initialLoadDone.current) {
-              // Solo actualizamos datos, no enviamos alerta local
-              console.log("Datos de partidos actualizados en tiempo real");
+              console.log("Datos actualizados (Sin notificación local)");
           }
       });
 
       const qNews = query(collection(db, 'noticias'), orderBy('fecha', 'desc'), limit(1));
       const unsubNews = onSnapshot(qNews, (snap) => {
-          // ✅ CORRECCIÓN: Quitamos el sendNotification de aquí también
           if (initialLoadDone.current) {
-             console.log("Noticias actualizadas en tiempo real");
+             console.log("Noticias actualizadas (Sin notificación local)");
           }
       });
 
