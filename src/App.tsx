@@ -3,7 +3,8 @@ import './App.css';
 import { db, auth, messaging } from './firebase'; 
 import { collection, getDocs, doc, onSnapshot, query, where, limit, orderBy, updateDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth'; 
-import { getToken } from 'firebase/messaging';
+// ✅ AGREGAMOS onMessage AQUÍ
+import { getToken, onMessage } from 'firebase/messaging';
 import type { DocumentData } from 'firebase/firestore'; 
 
 // Importaciones de Componentes
@@ -99,58 +100,57 @@ function App() {
     setSelectedFormId(null); setCalendarView(false); setMesaTecnicaView(false); setStatsView(false); setStandingsView(false); setSelectForma5MatchId(null);
     setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false);
   };
-  
-  // 1. LÓGICA DE NOTIFICACIONES PUSH (FCM)
-  useEffect(() => {
-    const requestNotificationPermission = async () => {
-      // Solo ejecutamos si hay usuario logueado y messaging está soportado/inicializado
-      if (!user || !messaging) return;
 
-      try {
-        const permission = await Notification.requestPermission();
-        if (permission === 'granted') {
-          // Obtener el Token único de este dispositivo
-          const token = await getToken(messaging, {
-            // ✅ CLAVE VAPID REAL INTEGRADA AQUÍ 👇
-            vapidKey: "BCIo9OadymsSrPl7ByiJ-MFXyunwbesFbKOw8ZTOaVRQInFVbTzQgfHSZaJx05vfdUZZZsv9XLdCKxtdvg3LNkg" 
-          });
-          
-          if (token) {
-            console.log("Token FCM generado:", token);
-            // Guardamos el token en el perfil del usuario en Firestore
-            await updateDoc(doc(db, 'usuarios', user.uid), {
-              fcmToken: token
-            });
-          }
-        }
-      } catch (error) {
-        console.log("Error configurando notificaciones:", error);
-      }
-    };
-
-    if (user) {
-      requestNotificationPermission();
-    }
-  }, [user]); 
-
-  // Notificaciones Locales (Existente)
-  useEffect(() => {
-    if ('Notification' in window && Notification.permission !== 'granted') {
-        Notification.requestPermission();
-    }
-  }, []);
-
-  const sendNotification = (title: string, body: string, icon = 'https://cdn-icons-png.flaticon.com/512/33/33308.png') => {
+  // Función auxiliar para mostrar notificaciones visuales
+  const sendNotification = (title: string, body: string, icon = 'https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg') => {
       if ('Notification' in window && Notification.permission === 'granted') {
           try {
-            new Notification(title, { body, icon, tag: title.replace(/\s/g, '_') });
+            new Notification(title, { body, icon, tag: 'madera15_alert' });
           } catch (e) {
               console.log("Error push:", e);
           }
       }
   };
+  
+  // 1. LÓGICA DE NOTIFICACIONES PUSH (FCM)
+  useEffect(() => {
+    const setupNotifications = async () => {
+      if (!user || !messaging) return;
 
-  // Detector Cambios
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission === 'granted') {
+          // A. Obtener Token
+          const token = await getToken(messaging, {
+            vapidKey: "BCIo9OadymsSrPl7ByiJ-MFXyunwbesFbKOw8ZTOaVRQInFVbTzQgfHSZaJx05vfdUZZZsv9XLdCKxtdvg3LNkg" 
+          });
+          
+          if (token) {
+            console.log("Token FCM:", token);
+            await updateDoc(doc(db, 'usuarios', user.uid), { fcmToken: token });
+          }
+
+          // B. Escuchar mensajes en PRIMER PLANO (Cuando la app está abierta)
+          onMessage(messaging, (payload) => {
+            console.log('Mensaje en primer plano:', payload);
+            const titulo = payload.notification?.title || "¡Nueva Notificación!";
+            const cuerpo = payload.notification?.body || "Revisa la app para más detalles.";
+            
+            // Usamos la misma función visual que usas para los partidos en vivo
+            sendNotification(titulo, cuerpo);
+          });
+        }
+      } catch (error) {
+        console.log("Error notificaciones:", error);
+      }
+    };
+
+    if (user) {
+      setupNotifications();
+    }
+  }, [user]); 
+
+  // Detector Cambios en Vivo (Snapshot)
   useEffect(() => {
       const qMatches = query(collection(db, 'calendario')); 
       const unsubMatches = onSnapshot(qMatches, (snap) => {
@@ -161,6 +161,7 @@ function App() {
               snap.docChanges().forEach((change) => {
                   const data = change.doc.data();
                   if (change.type === 'modified' && data.estatus === 'vivo') {
+                      // Nota: Esta es la notificación local por Snapshot
                       sendNotification("🏀 ¡PARTIDO EN VIVO!", `${data.equipoLocalNombre} vs ${data.equipoVisitanteNombre} ha comenzado.`);
                   }
               });
@@ -276,7 +277,6 @@ function App() {
   if (loading) return <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100vh'}}>Cargando...</div>;
   if (!user) return <Login />;
   
-  // --- PANTALLA DE REGISTRO (ROL PENDIENTE) ---
   if (user.rol === 'pendiente') {
       return (
         <div className="login-wrapper" style={{
@@ -348,7 +348,6 @@ function App() {
       if (f21) { displayTeamName = f21.nombreEquipo; displayTeamLogo = f21.logoUrl || ''; }
   }
 
-  // --- DASHBOARD PRINCIPAL (Mantiene la cancha oscura) ---
   return (
     <div className="app-container" style={{
         backgroundImage: 'url(https://i.postimg.cc/wMdsqw2D/unnamed.jpg)',
