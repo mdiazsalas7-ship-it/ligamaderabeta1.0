@@ -1,7 +1,6 @@
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.0.0/firebase-messaging-compat.js');
 
-// Configuración (Tus datos)
 const firebaseConfig = {
   apiKey: "AIzaSyAjsZYTF8-17cGGhzD2ZOtANIrtgYcDB-A",
   authDomain: "cjoba-app.firebaseapp.com",
@@ -13,10 +12,20 @@ const firebaseConfig = {
 };
 
 firebase.initializeApp(firebaseConfig);
-
 const messaging = firebase.messaging();
 
-// NOTA IMPORTANTE:
-// Hemos borrado 'onBackgroundMessage' porque Firebase SDK ya maneja 
-// automáticamente las notificaciones cuando vienen con título y cuerpo.
-// Al quitarlo, desaparece el duplicado.
+// Mantenemos esto porque tu sistema lo necesita para despertar
+messaging.onBackgroundMessage(function(payload) {
+  console.log('Mensaje recibido en background:', payload);
+  
+  // OJO: Aquí leemos de 'data' o 'notification' para asegurar compatibilidad
+  const titulo = payload.notification?.title || payload.data?.title || "Notificación";
+  const cuerpo = payload.notification?.body || payload.data?.body || "Nueva información";
+  
+  const notificationOptions = {
+    body: cuerpo,
+    icon: 'https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg' // Tu logo fijo
+  };
+
+  self.registration.showNotification(titulo, notificationOptions);
+});

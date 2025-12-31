@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { doc, getDoc, collection, setDoc, getDocs, query, where } from 'firebase/firestore';
+import { generarActaPDF } from './ActaGenerator'; // <--- 1. IMPORTANTE: AGREGAR ESTO
 
 interface PlayerStat {
     playerId: string;
@@ -36,8 +37,7 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                     const data = matchSnap.data();
                     setMatch({ id: matchSnap.id, ...data });
 
-                    // 2. Cargar Logos (Buscando en colección equipos por nombre)
-                    // Si tienes IDs de equipo en el calendario, sería mejor usarlos, pero por nombre funciona si son únicos.
+                    // Cargar Logos
                     const qEquipos = query(collection(db, 'equipos'));
                     const equiposSnap = await getDocs(qEquipos);
                     let logoL = DEFAULT_LOGO;
@@ -113,7 +113,6 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
 
     const handleSave = async () => {
         if (rol !== 'admin') return; 
-
         setSaving(true);
         try {
             const allStats = [...statsA, ...statsB];
@@ -134,7 +133,6 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
         } catch (e) { console.error(e); alert("Error al guardar."); } finally { setSaving(false); }
     };
 
-    // MVP CALCULATION
     const getValuation = (s: PlayerStat) => s.puntos + s.rebotes + s.asistencias + s.robos + s.bloqueos;
     const gameMVP = [...statsA, ...statsB].sort((a,b) => getValuation(b) - getValuation(a))[0];
 
@@ -180,6 +178,21 @@ const MatchDetailViewer: React.FC<{ matchId: string, onClose: () => void, rol: s
                             <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{match?.equipoVisitanteNombre}</div>
                         </div>
                     </div>
+
+                    {/* --- 2. BOTÓN DE DESCARGA PDF --- */}
+                    <button 
+                        onClick={() => generarActaPDF(match)}
+                        style={{
+                            marginTop: '20px', background: '#ef4444', color: 'white', border: 'none', 
+                            padding: '10px 20px', borderRadius: '20px', cursor: 'pointer', 
+                            fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px',
+                            boxShadow: '0 4px 6px rgba(0,0,0,0.2)'
+                        }}
+                    >
+                        📄 Descargar Acta Oficial
+                    </button>
+                    {/* -------------------------------- */}
+
                 </div>
 
                 {/* MVP CARD */}
