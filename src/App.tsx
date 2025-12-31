@@ -3,7 +3,6 @@ import './App.css';
 import { db, auth, messaging } from './firebase'; 
 import { collection, getDocs, doc, onSnapshot, query, where, limit, orderBy, updateDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth'; 
-// ✅ AGREGAMOS onMessage AQUÍ
 import { getToken, onMessage } from 'firebase/messaging';
 import type { DocumentData } from 'firebase/firestore'; 
 
@@ -101,7 +100,7 @@ function App() {
     setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false);
   };
 
-  // Función auxiliar para mostrar notificaciones visuales
+  // Función visual para mostrar notificaciones (usada por FCM)
   const sendNotification = (title: string, body: string, icon = 'https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg') => {
       if ('Notification' in window && Notification.permission === 'granted') {
           try {
@@ -130,13 +129,12 @@ function App() {
             await updateDoc(doc(db, 'usuarios', user.uid), { fcmToken: token });
           }
 
-          // B. Escuchar mensajes en PRIMER PLANO (Cuando la app está abierta)
+          // B. Escuchar mensajes en PRIMER PLANO
           onMessage(messaging, (payload) => {
             console.log('Mensaje en primer plano:', payload);
             const titulo = payload.notification?.title || "¡Nueva Notificación!";
             const cuerpo = payload.notification?.body || "Revisa la app para más detalles.";
-            
-            // Usamos la misma función visual que usas para los partidos en vivo
+            // Solo mostramos esta, la de Firebase
             sendNotification(titulo, cuerpo);
           });
         }
@@ -150,33 +148,25 @@ function App() {
     }
   }, [user]); 
 
-  // Detector Cambios en Vivo (Snapshot)
+  // Detector Cambios en Vivo (Snapshot) - YA SIN NOTIFICACIONES LOCALES
   useEffect(() => {
       const qMatches = query(collection(db, 'calendario')); 
       const unsubMatches = onSnapshot(qMatches, (snap) => {
           const lives = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => m.estatus === 'vivo');
           setLiveMatches(lives);
 
+          // ✅ CORRECCIÓN: Quitamos el sendNotification de aquí para que no se duplique con el Push
           if (initialLoadDone.current) {
-              snap.docChanges().forEach((change) => {
-                  const data = change.doc.data();
-                  if (change.type === 'modified' && data.estatus === 'vivo') {
-                      // Nota: Esta es la notificación local por Snapshot
-                      sendNotification("🏀 ¡PARTIDO EN VIVO!", `${data.equipoLocalNombre} vs ${data.equipoVisitanteNombre} ha comenzado.`);
-                  }
-              });
+              // Solo actualizamos datos, no enviamos alerta local
+              console.log("Datos de partidos actualizados en tiempo real");
           }
       });
 
       const qNews = query(collection(db, 'noticias'), orderBy('fecha', 'desc'), limit(1));
       const unsubNews = onSnapshot(qNews, (snap) => {
+          // ✅ CORRECCIÓN: Quitamos el sendNotification de aquí también
           if (initialLoadDone.current) {
-             snap.docChanges().forEach((change) => {
-                 if (change.type === 'added') {
-                     const data = change.doc.data();
-                     sendNotification("📢 Nueva Noticia", data.titulo || "Información importante.");
-                 }
-             });
+             console.log("Noticias actualizadas en tiempo real");
           }
       });
 
