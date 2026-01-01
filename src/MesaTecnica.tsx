@@ -30,7 +30,6 @@ interface MatchData {
     tiemposLocal: number; tiemposVisitante: number;
     gameLog?: GameEvent[];
     fechaAsignada?: string; hora?: string; cancha?: string;
-    // NUEVO: Para guardar los cuartos automáticamente
     cuartos?: {
         q1: {local: number, visitante: number},
         q2: {local: number, visitante: number},
@@ -39,17 +38,46 @@ interface MatchData {
     };
 }
 
-// --- 1. VISUALIZADOR DE PERIODO ---
+// --- 1. VISUALIZADOR DE PERIODO (CORREGIDO PARA TEXTOS EXACTOS) ---
 const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: number, estatus: string, onNextQuarter: () => void }) => {
+    
+    // Lógica para mostrar el texto exacto según el cuarto
+    const getButtonText = () => {
+        if (estatus === 'programado') return "INICIAR PARTIDO";
+        
+        switch (periodo) {
+            case 1: return "FIN DEL PRIMER CUARTO >>";
+            case 2: return "FIN DEL SEGUNDO CUARTO >>";
+            case 3: return "FIN DEL TERCER CUARTO >>";
+            case 4: return "FIN DEL CUARTO CUARTO (IR A EXTRA) >>"; // Permite ir a prórroga
+            default: return `FIN DE PRÓRROGA ${periodo - 4} >>`;
+        }
+    };
+
     const getPeriodoLabel = (p: number) => p <= 4 ? `CUARTO ${p}` : `PRÓRROGA ${p - 4}`;
+
     return (
         <div style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center'}}>
             <div style={{color:'#fbbf24', fontWeight:'bold', fontSize:'1.5rem', marginBottom:'10px', textShadow:'2px 2px 4px #000'}}>
                 {getPeriodoLabel(periodo)}
             </div>
             <div style={{display:'flex', gap:'5px'}}>
-                <button onClick={onNextQuarter} className="btn" style={{background: estatus === 'programado' ? '#10b981' : '#f59e0b', color:'black', fontWeight:'bold', padding:'10px 20px', fontSize:'1rem', border:'none', borderRadius:'6px', cursor:'pointer'}}>
-                    {estatus === 'programado' ? 'INICIAR JUEGO' : (periodo >= 4 ? 'FINALIZAR PARTIDO' : 'SIGUIENTE PERIODO >>')}
+                <button 
+                    onClick={onNextQuarter} 
+                    className="btn" 
+                    style={{
+                        background: estatus === 'programado' ? '#10b981' : '#f59e0b', 
+                        color:'black', 
+                        fontWeight:'bold', 
+                        padding:'10px 20px', 
+                        fontSize:'0.9rem', 
+                        border:'none', 
+                        borderRadius:'6px', 
+                        cursor:'pointer',
+                        whiteSpace: 'nowrap'
+                    }}
+                >
+                    {getButtonText()}
                 </button>
             </div>
         </div>
@@ -151,8 +179,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
     const [benchModalOpen, setBenchModalOpen] = useState<'local' | 'visitante' | null>(null);
 
-    // NUEVO: Estado para llevar la cuenta de los puntos al inicio de cada cuarto
-    // Esto sirve para calcular cuánto hicieron en el cuarto actual (Marcador Actual - MarcadorInicioCuarto)
     const [puntosInicioCuarto, setPuntosInicioCuarto] = useState({ local: 0, visitante: 0 });
 
     // 1. CARGAR PARTIDOS
@@ -178,7 +204,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                 setMatches(list);
             } catch (error) {
                 console.error("Error cargando partidos:", error);
-                // Fallback por si falta el índice compuesto
                 const qFallback = query(collection(db, 'calendario'), orderBy('fechaAsignada'));
                 const snapF = await getDocs(qFallback);
                 const listF = snapF.docs.map(d => ({ id: d.id, ...d.data() } as any));
@@ -203,16 +228,8 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     staffVisitante: data.staffVisitante || {entrenador:'', asistente:''},
                     forma5: data.forma5 || {},
                     gameLog: data.gameLog || [],
-                    cuartos: data.cuartos || {} // Cargar cuartos si existen
+                    cuartos: data.cuartos || {}
                 });
-
-                // Lógica de recuperación de estado al recargar:
-                // Si ya vamos por el Q2, Q3..., necesitamos saber cuántos puntos llevaban antes.
-                // Como es complejo saberlo exacto al recargar, asumimos 0 para no romper, 
-                // o podríamos calcularlo sumando los cuartos anteriores si existieran.
-                // Para simplificar y robustez: Si recargas la página, el cálculo automático del cuarto actual 
-                // podría fallar si no guardamos 'puntosInicioCuarto' en BD. 
-                // PERO, para no complicar la BD, asumiremos que no recargas a mitad de cuarto.
             }
         });
         return () => unsub();
@@ -373,27 +390,31 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         setSubMode(null);
     };
 
-    // --- AQUÍ ESTÁ LA LÓGICA AUTOMÁTICA DE CUARTOS ---
+    // --- MANEJO DE CUARTOS (Avance de periodo) ---
     const handleNextQuarter = async () => {
         if (!matchData) return;
         
-        // Si inicia el juego
+        // Iniciar partido si está programado
         if (matchData.estatus === 'programado') { 
             await updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo', cuarto: 1 });
-            setPuntosInicioCuarto({ local: 0, visitante: 0 }); // Todo empieza en 0
+            setPuntosInicioCuarto({ local: 0, visitante: 0 });
             addLog("📢 INICIO DEL PARTIDO", 'system', 'system'); 
             return; 
         }
 
-        // Si ya está vivo, cambiamos de cuarto
-        if (!window.confirm(`¿Iniciar Siguiente Periodo (Q${matchData.cuarto + 1})?`)) return;
+        // Determinar mensaje de confirmación adecuado
+        const nextQ = matchData.cuarto + 1;
+        const confirmMsg = nextQ > 4 
+            ? `¿Finalizó el empate? Iniciar PRÓRROGA (Q${nextQ})`
+            : `¿Finalizar Q${matchData.cuarto} e iniciar Q${nextQ}?`;
 
-        // 1. Calcular puntos hechos en el cuarto que acaba de terminar
+        if (!window.confirm(confirmMsg)) return;
+
+        // Calcular puntos del cuarto actual
         const puntosHechosLocal = matchData.marcadorLocal - puntosInicioCuarto.local;
         const puntosHechosVisitante = matchData.marcadorVisitante - puntosInicioCuarto.visitante;
 
-        // 2. Guardar esos puntos en la BD (automáticamente)
-        const qKey = `q${matchData.cuarto}`; // "q1", "q2", etc.
+        const qKey = `q${matchData.cuarto}`;
         const updatePayload: any = { 
             cuarto: increment(1), 
             faltasLocal: 0, 
@@ -401,31 +422,83 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             [`cuartos.${qKey}`]: { local: puntosHechosLocal, visitante: puntosHechosVisitante }
         };
 
-        // Reglas de Tiempos Muertos FIBA
-        const nextQ = matchData.cuarto + 1;
-        if (nextQ === 3) { // Al descanso se renuevan los TM
+        // Reglas de reinicio de tiempos fuera (FIBA)
+        if (nextQ === 3) { // Inicio de 2da Mitad (se renuevan a 3)
             updatePayload.tiemposLocal = 3; 
             updatePayload.tiemposVisitante = 3; 
-        } else if (nextQ > 4) { // Prórroga
+        } else if (nextQ > 4) { // Inicio de Prórroga (se da 1 por cada extra)
             updatePayload.tiemposLocal = 1; 
             updatePayload.tiemposVisitante = 1; 
         }
 
-        // 3. Ejecutar Update en BD
         await updateDoc(doc(db, 'calendario', matchData.id), updatePayload);
-        
-        // 4. Actualizar referencia local para el siguiente cuarto
-        // El nuevo inicio es el marcador actual
         setPuntosInicioCuarto({ local: matchData.marcadorLocal, visitante: matchData.marcadorVisitante });
-
-        addLog(`🕒 Fin del Q${matchData.cuarto} -> Inicio Q${nextQ}`, 'period', 'system');
+        
+        const logMsg = nextQ > 4 
+            ? `🕒 Fin del periodo -> Inicio PRÓRROGA ${nextQ - 4}`
+            : `🕒 Fin del Q${matchData.cuarto} -> Inicio Q${nextQ}`;
+        
+        addLog(logMsg, 'period', 'system');
     };
 
-    // --- FINALIZAR PARTIDO (Lógica final de cuartos también aquí) ---
-    const handleFinalize = async () => {
-        if (!matchData || !window.confirm("¿FINALIZAR PARTIDO?")) return;
+    // --- LÓGICA CORREGIDA DE TIEMPOS FUERA (FIBA) ---
+    const handleTimeoutAdjustment = async (team: 'local'|'visitante', change: number) => {
+        if (!matchData) return;
+
+        // 1. Obtener valor actual
+        const current = team === 'local' ? (matchData.tiemposLocal ?? 0) : (matchData.tiemposVisitante ?? 0);
         
-        // Guardamos los puntos del ÚLTIMO cuarto que se jugó
+        // 2. Calcular nuevo valor
+        const newValue = current + change;
+
+        // 3. Determinar LÍMITE MÁXIMO según el cuarto actual (Reglas FIBA)
+        const q = matchData.cuarto || 1;
+        let maxTimeouts = 0;
+
+        if (q <= 2) {
+            maxTimeouts = 2; // Primera mitad (Q1 + Q2) = 2 tiempos
+        } else if (q <= 4) {
+            maxTimeouts = 3; // Segunda mitad (Q3 + Q4) = 3 tiempos
+        } else {
+            maxTimeouts = 1; // Prórrogas = 1 tiempo
+        }
+
+        // 4. VALIDACIONES
+        // Evitar negativos
+        if (newValue < 0) return; 
+
+        // Evitar superar el máximo permitido
+        if (newValue > maxTimeouts) {
+            alert(`⚠️ El límite de tiempos fuera para este periodo es ${maxTimeouts}.`);
+            return;
+        }
+
+        // 5. Guardar en BD
+        const field = team === 'local' ? 'tiemposLocal' : 'tiemposVisitante';
+        const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
+        
+        const updates: any = { [field]: newValue };
+
+        // Log si se gastó un tiempo
+        if (change < 0) {
+            const newEvent: GameEvent = { 
+                id: Date.now().toString(), 
+                text: `🛑 TIEMPO MUERTO: ${teamName} (Restantes: ${newValue})`, 
+                time: formatTimeForLog(), 
+                team, 
+                type: 'timeout', 
+                action: 'timeout' 
+            };
+            updates.gameLog = [newEvent, ...(matchData.gameLog || [])];
+        } 
+        
+        await updateDoc(doc(db, 'calendario', matchData.id), updates);
+    };
+
+    // --- FINALIZAR PARTIDO (Botón Verde Inferior) ---
+    const handleFinalize = async () => {
+        if (!matchData || !window.confirm("¿FINALIZAR PARTIDO DEFINITIVAMENTE?")) return;
+        
         const puntosHechosLocal = matchData.marcadorLocal - puntosInicioCuarto.local;
         const puntosHechosVisitante = matchData.marcadorVisitante - puntosInicioCuarto.visitante;
         const qKey = `q${matchData.cuarto}`;
@@ -437,7 +510,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await updateDoc(doc(db, 'equipos', winnerId), { victorias: increment(1), puntos: increment(2), puntos_favor: increment(matchData.marcadorLocal), puntos_contra: increment(matchData.marcadorVisitante) });
         await updateDoc(doc(db, 'equipos', loserId), { derrotas: increment(1), puntos: increment(1), puntos_favor: increment(matchData.marcadorVisitante), puntos_contra: increment(matchData.marcadorLocal) });
         
-        // Finalizamos y guardamos el último cuarto
         await updateDoc(doc(db, 'calendario', matchData.id), { 
             estatus: 'finalizado',
             [`cuartos.${qKey}`]: { local: puntosHechosLocal, visitante: puntosHechosVisitante }
@@ -455,22 +527,8 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         setStatsCache(cleanCache);
         setLocalOnCourt([]); setLocalBench([]); setVisitanteOnCourt([]); setVisitanteBench([]);
         await updateDoc(doc(db, 'calendario', matchData.id), { marcadorLocal: 0, marcadorVisitante: 0, faltasLocal: 0, faltasVisitante: 0, tiemposLocal: 2, tiemposVisitante: 2, cuarto: 1, gameLog: [], estatus: 'programado', staffLocal: null, staffVisitante: null, cuartos: null });
-        setPuntosInicioCuarto({local:0, visitante:0}); // Reset local
+        setPuntosInicioCuarto({local:0, visitante:0});
         alert("Reiniciado.");
-    };
-
-    const handleTimeoutAdjustment = async (team: 'local'|'visitante', change: number) => {
-        if (!matchData) return;
-        const current = team === 'local' ? (matchData.tiemposLocal ?? 0) : (matchData.tiemposVisitante ?? 0);
-        if (change < 0 && current <= 0) return;
-        const field = team === 'local' ? 'tiemposLocal' : 'tiemposVisitante';
-        const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
-        const updates: any = { [field]: increment(change) };
-        if (change < 0) {
-            const newEvent: GameEvent = { id: Date.now().toString(), text: `🛑 TIEMPO MUERTO: ${teamName}`, time: formatTimeForLog(), team, type: 'timeout', action: 'timeout' };
-            updates.gameLog = [newEvent, ...(matchData.gameLog || [])];
-        } 
-        await updateDoc(doc(db, 'calendario', matchData.id), updates);
     };
 
     if (!selectedMatchId) return (
