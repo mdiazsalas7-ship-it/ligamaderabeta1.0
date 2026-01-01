@@ -2,7 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
 
-interface Player { id: string; nombre: string; numero: number; cedula?: string; suspendido?: boolean; }
+// Interfaz completa (lo que viene de la BD)
+interface Player { 
+    id: string; 
+    nombre: string; 
+    numero: number; 
+    cedula?: string; 
+    telefono?: string; 
+    suspendido?: boolean; 
+}
+
 interface Staff { entrenador: string; asistente: string; }
 
 const Forma5Selector: React.FC<{ 
@@ -12,24 +21,24 @@ const Forma5Selector: React.FC<{
     onClose: () => void 
 }> = ({ calendarioId, equipoId, onSuccess, onClose }) => {
 
-    const [allPlayers, setAllPlayers] = useState<Player[]>([]); // Roster completo disponible
-    const [selectedIds, setSelectedIds] = useState<string[]>([]); // Selección actual (Máx 12)
-    const [startersIds, setStartersIds] = useState<string[]>([]); // IDs de los 5 abridores
-    const [captainId, setCaptainId] = useState<string | null>(null); // ID del capitán
+    const [allPlayers, setAllPlayers] = useState<Player[]>([]); 
+    const [selectedIds, setSelectedIds] = useState<string[]>([]); // Máx 12
+    const [startersIds, setStartersIds] = useState<string[]>([]); // Exactamente 5
+    const [captainId, setCaptainId] = useState<string | null>(null); // Exactamente 1
     
     const [matchInfo, setMatchInfo] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     
     const [staff, setStaff] = useState<Staff>({ entrenador: '', asistente: '' });
-    
     const [isLocked, setIsLocked] = useState(false);
-    const [submittedRoster, setSubmittedRoster] = useState<any[]>([]); // Lista de jugadores guardados
-    const [submittedStarters, setSubmittedStarters] = useState<string[]>([]); // IDs de abridores guardados
+    const [submittedRoster, setSubmittedRoster] = useState<any[]>([]); 
+    const [submittedStarters, setSubmittedStarters] = useState<string[]>([]);
 
     useEffect(() => {
         const loadData = async () => {
             try {
+                // 1. Revisar si ya se envió la Forma 5 para este partido
                 const matchRef = doc(db, 'calendario', calendarioId);
                 const matchSnap = await getDoc(matchRef);
                 
@@ -37,36 +46,34 @@ const Forma5Selector: React.FC<{
                     const data = matchSnap.data();
                     setMatchInfo(data);
                     
-                    // 🔒 VERIFICACIÓN DE SEGURIDAD (Si ya existe lista guardada)
                     const forma5Data = data.forma5?.[equipoId];
 
                     if (forma5Data && forma5Data.jugadores && forma5Data.jugadores.length > 0) {
+                        // YA FUE ENVIADA -> MODO SOLO LECTURA
                         setIsLocked(true);
-                        
-                        // Cargar datos guardados
                         setSubmittedRoster(forma5Data.jugadores);
                         setSubmittedStarters(forma5Data.startersIds || []);
                         setCaptainId(forma5Data.captainId || null);
 
-                        // Cargar Staff guardado para vista bloqueada
                         const isLocal = data.equipoLocalId === equipoId;
                         const savedStaff = isLocal ? data.staffLocal : data.staffVisitante;
-                        if (savedStaff) setStaff(savedStaff); else setStaff({ entrenador: 'No registrado', asistente: 'No registrado' });
-
+                        if (savedStaff) setStaff(savedStaff);
+                        
                         setLoading(false);
                         return;
                     }
                 }
 
-                // 2. Si NO está bloqueado, cargamos datos actuales para editar
-                
-                // A) Cargar Jugadores
+                // 2. Si NO ha sido enviada, cargamos la Forma 21 (Pool de jugadores)
                 const playersRef = collection(db, 'forma21s', equipoId, 'jugadores');
                 const pSnap = await getDocs(playersRef);
-                const roster = pSnap.docs.map(d => ({ id: d.id, ...d.data() } as Player)).sort((a,b) => a.numero - b.numero);
+                const roster = pSnap.docs.map(d => ({ id: d.id, ...d.data() } as Player));
+                
+                // Ordenar por número de camiseta
+                roster.sort((a,b) => a.numero - b.numero);
                 setAllPlayers(roster);
 
-                // B) Cargar Staff actual
+                // Cargar Staff desde la Forma 21
                 const f21Ref = doc(db, 'forma21s', equipoId);
                 const f21Snap = await getDoc(f21Ref);
                 if (f21Snap.exists()) {
@@ -88,44 +95,37 @@ const Forma5Selector: React.FC<{
         loadData();
     }, [calendarioId, equipoId]);
 
+    // --- LÓGICA DE SELECCIÓN ---
     const togglePlayer = (player: Player) => {
         if (isLocked) return;
 
-        // --- BLOQUEO POR SUSPENSIÓN ---
+        // 1. Bloqueo si está suspendido por el Admin
         if (player.suspendido) {
-            alert(`⛔ El jugador ${player.nombre} está SUSPENDIDO y no puede ser seleccionado.`);
+            alert(`⛔ El jugador ${player.nombre} está SUSPENDIDO y no puede jugar.`);
             return;
         }
 
         if (selectedIds.includes(player.id)) {
-            // Si lo deselecciona, debe dejar de ser capitán o abridor si lo era
+            // Deseleccionar: Limpiar roles si los tenía
             setSelectedIds(prev => prev.filter(pid => pid !== player.id));
             setStartersIds(prev => prev.filter(pid => pid !== player.id));
             if (captainId === player.id) setCaptainId(null);
         } else {
+            // Seleccionar: Validar Máximo 12 (Regla FIBA)
             if (selectedIds.length >= 12) {
-                alert("⚠️ Máximo 12 jugadores permitidos.");
+                alert("⚠️ Máximo 12 jugadores permitidos en la hoja de anotación.");
                 return;
             }
             setSelectedIds(prev => [...prev, player.id]);
         }
     };
     
-    // --- NUEVAS FUNCIONES PARA ROLES ---
-
     const toggleStarter = (id: string) => {
         if (!selectedIds.includes(id)) return;
-        
         setStartersIds(prev => {
-            if (prev.includes(id)) {
-                return prev.filter(pid => pid !== id);
-            } else {
-                if (prev.length >= 5) {
-                    alert("⚠️ Solo 5 jugadores pueden ser titulares.");
-                    return prev;
-                }
-                return [...prev, id];
-            }
+            if (prev.includes(id)) return prev.filter(pid => pid !== id);
+            if (prev.length >= 5) { alert("⚠️ Ya hay 5 titulares seleccionados."); return prev; }
+            return [...prev, id];
         });
     };
     
@@ -134,50 +134,45 @@ const Forma5Selector: React.FC<{
         setCaptainId(prev => (prev === id ? null : id));
     };
 
-
     const handleSave = async () => {
         if (isLocked) return; 
-        const finalRoster = allPlayers.filter(p => selectedIds.includes(p.id));
+        
+        // --- VALIDACIONES FIBA ---
+        if (selectedIds.length < 5) return alert("⚠️ Mínimo 5 jugadores para iniciar el partido.");
+        if (startersIds.length !== 5) return alert("⚠️ Debes marcar exactamente 5 titulares.");
+        if (!captainId) return alert("⚠️ Debes designar un Capitán.");
 
-        if (finalRoster.length < 5) {
-            alert("⚠️ Debes seleccionar al menos 5 jugadores.");
-            return;
-        }
-        if (startersIds.length !== 5) {
-            alert("⚠️ Debes seleccionar exactamente 5 jugadores abridores (titulares).");
-            return;
-        }
-        if (!captainId) {
-             alert("⚠️ Debes seleccionar un Capitán.");
-            return;
-        }
-
-
-        const confirmacion = window.confirm(
-            "⚠️ ADVERTENCIA DE SEGURIDAD ⚠️\n\n" +
-            "Una vez enviada la Forma 5 (Jugadores, Titulares y Capitán), NO PODRÁS MODIFICARLA.\n" +
-            "¿Estás seguro de que esta es la alineación definitiva?"
-        );
-
-        if (!confirmacion) return;
+        if (!window.confirm("⚠️ ¿Enviar Forma 5 Definitiva?\n\nNo podrás hacer cambios después.")) return;
 
         setSaving(true);
         try {
+            // 1. Filtrar jugadores seleccionados
+            const rawRoster = allPlayers.filter(p => selectedIds.includes(p.id));
+
+            // 2. LIMPIEZA DE DATOS (IMPORTANTE)
+            // Solo guardamos ID, Nombre y Número en el partido. Borramos Cédula y Teléfono.
+            const cleanRoster = rawRoster.map(p => ({
+                id: p.id,
+                nombre: p.nombre,
+                numero: p.numero
+                // NO incluimos cedula ni telefono aquí
+            }));
+
             const matchRef = doc(db, 'calendario', calendarioId);
-            
             const isLocal = matchInfo.equipoLocalId === equipoId;
             const staffField = isLocal ? 'staffLocal' : 'staffVisitante';
 
+            // Guardar en el documento del partido (Calendario)
             await updateDoc(matchRef, {
                 [`forma5.${equipoId}`]: {
-                    jugadores: finalRoster, 
+                    jugadores: cleanRoster, // Lista limpia
                     startersIds: startersIds, 
                     captainId: captainId 
                 },
                 [staffField]: staff 
             });
 
-            alert("✅ Forma 5 enviada y bloqueada correctamente.");
+            alert("✅ Alineación enviada correctamente.");
             onSuccess();
         } catch (error) {
             console.error(error);
@@ -187,205 +182,138 @@ const Forma5Selector: React.FC<{
         }
     };
 
-    if (loading) return <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.8)', color:'white', display:'flex', justifyContent:'center', alignItems:'center', zIndex:3000}}>Verificando estado...</div>;
+    if (loading) return <div style={{position:'fixed', top:0, left:0, bottom:0, right:0, background:'rgba(0,0,0,0.8)', color:'white', display:'flex', justifyContent:'center', alignItems:'center', zIndex:3000}}>Cargando...</div>;
 
-    const count = selectedIds.length;
-    
-    // --- VISTA DE SOLO LECTURA (BLOQUEADO) ---
+    // --- VISTA BLOQUEADA (YA ENVIADA) ---
     if (isLocked) {
-         // En vista de solo lectura, submittedRoster ya contiene la lista de jugadores
         const captain = submittedRoster.find(p => p.id === captainId);
-
         return (
-            <div className="animate-fade-in" style={{
-                position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
-                backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 3000, 
-                display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px'
-            }}>
-                <div style={{
-                    backgroundColor: 'white', width: '100%', maxWidth: '500px', maxHeight: '90vh', 
-                    borderRadius: '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-                    boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
-                }}>
-                    <div style={{padding: '20px', background: '#dc2626', color: 'white', textAlign:'center'}}>
-                        <div style={{fontSize:'3rem'}}>🔒</div>
-                        <h3 style={{margin: 0, fontSize: '1.2rem', textTransform:'uppercase'}}>Forma 5 Cerrada</h3>
-                        <p style={{margin: '5px 0 0 0', opacity: 0.9, fontSize:'0.9rem'}}>
-                            Alineación y Cuerpo Técnico validados.
-                        </p>
+            <div className="animate-fade-in" style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 3000, display: 'flex', justifyContent: 'center', alignItems: 'center'}}>
+                <div style={{backgroundColor: 'white', width: '90%', maxWidth: '500px', borderRadius: '12px', overflow: 'hidden'}}>
+                    <div style={{padding: '20px', background: '#166534', color: 'white', textAlign:'center'}}>
+                        <h3>✅ Forma 5 Enviada</h3>
+                        <p style={{margin:0, fontSize:'0.9rem'}}>Lista oficial entregada a la mesa técnica.</p>
                     </div>
-
-                    {/* CAPITÁN Y STAFF GUARDADO */}
-                    <div style={{padding:'15px', background:'#fef2f2', borderBottom:'1px solid #fecaca', color:'#991b1b', fontSize:'0.9rem'}}>
-                        <div style={{fontWeight:'bold', color:'#374151', marginBottom:'5px'}}>⭐ Capitán: {captain?.nombre || 'N/A'}</div>
-                         <div style={{fontWeight:'bold', color:'#374151', marginBottom:'5px'}}>👔 DT: {staff.entrenador} | AT: {staff.asistente}</div>
+                    <div style={{padding:'15px', background:'#f0fdf4', borderBottom:'1px solid #bbf7d0', fontSize:'0.9rem'}}>
+                        <div><strong>DT:</strong> {staff.entrenador}</div>
+                        <div><strong>Capitán:</strong> {captain?.nombre || 'N/A'}</div>
                     </div>
-
-                    <div style={{flex: 1, overflowY: 'auto', padding: '20px'}}>
-                        <h4 style={{marginTop:0, color:'#374151', borderBottom:'1px solid #eee', paddingBottom:'5px'}}>Jugadores Inscritos ({submittedRoster.length}):</h4>
-                        <div style={{display: 'flex', flexDirection:'column', gap: '8px'}}>
-                            {submittedRoster.map(p => (
-                                <div key={p.id} style={{
-                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                    padding: '10px', borderRadius: '6px', background: '#f3f4f6', border: '1px solid #e5e7eb'
-                                }}>
-                                    <div style={{display: 'flex', alignItems: 'center', gap: '15px'}}>
-                                        <div style={{
-                                            width: '30px', height: '30px', borderRadius: '50%', 
-                                            background: '#374151', color: 'white',
-                                            display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold'
-                                        }}>
-                                            {p.numero}
-                                        </div>
-                                        <span style={{fontWeight: 'bold', color: '#1f2937'}}>{p.nombre}</span>
-                                    </div>
-                                    <div style={{fontSize:'0.8rem', fontWeight:'bold', color: submittedStarters.includes(p.id) ? '#10b981' : '#666'}}>
-                                        {submittedStarters.includes(p.id) ? 'TITULAR' : 'SUPLENTE'}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
+                    <div style={{maxHeight:'300px', overflowY:'auto', padding:'15px'}}>
+                        {submittedRoster.map(p => (
+                            <div key={p.id} style={{display:'flex', justifyContent:'space-between', padding:'8px', borderBottom:'1px solid #eee', fontSize:'0.9rem'}}>
+                                <span>#{p.numero} {p.nombre}</span>
+                                {submittedStarters.includes(p.id) && <span style={{color:'green', fontWeight:'bold'}}>TITULAR</span>}
+                            </div>
+                        ))}
                     </div>
-
-                    <div style={{padding: '20px', borderTop: '1px solid #eee', background: '#f9fafb'}}>
-                        <button onClick={onClose} className="btn btn-secondary" style={{width:'100%'}}>Cerrar</button>
+                    <div style={{padding:'15px', textAlign:'center'}}>
+                        <button onClick={onClose} className="btn btn-secondary">Cerrar</button>
                     </div>
                 </div>
             </div>
         );
     }
 
-    // --- VISTA DE SELECCIÓN (EDICIÓN) ---
+    // --- VISTA DE SELECCIÓN ---
     return (
-        <div className="animate-fade-in" style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
-            backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 3000, 
-            display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px'
-        }}>
-            <div style={{
-                backgroundColor: 'white', width: '100%', maxWidth: '600px', maxHeight: '90vh', 
-                borderRadius: '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-                boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
-            }}>
+        <div className="animate-fade-in" style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 3000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding:'10px'}}>
+            <div style={{backgroundColor: 'white', width: '100%', maxWidth: '600px', maxHeight: '95vh', borderRadius: '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden'}}>
+                
                 {/* HEADER */}
-                <div style={{padding: '20px', background: 'var(--primary)', color: 'white'}}>
-                    <h3 style={{margin: 0, fontSize: '1.2rem'}}>📋 Definir Alineación (Forma 5)</h3>
-                    <div style={{fontSize: '0.9rem', opacity: 0.9, marginTop: '5px'}}>
-                        {matchInfo?.equipoLocalNombre} vs {matchInfo?.equipoVisitanteNombre}
-                    </div>
+                <div style={{padding: '15px', background: 'var(--primary)', color: 'white'}}>
+                    <h3 style={{margin: 0, fontSize: '1.1rem'}}>📋 Seleccionar Jugadores (Juego)</h3>
+                    <div style={{fontSize:'0.8rem', opacity:0.8}}>{matchInfo?.equipoLocalNombre} vs {matchInfo?.equipoVisitanteNombre}</div>
                 </div>
 
-                {/* INFO STAFF A REGISTRAR */}
-                <div style={{padding: '15px', background: '#eff6ff', borderBottom: '1px solid #dbeafe', fontSize:'0.9rem'}}>
-                    <div style={{fontWeight:'bold', color:'#1e40af', marginBottom:'5px'}}>👔 Cuerpo Técnico: DT: {staff.entrenador} | AT: {staff.asistente}</div>
-                    <div style={{
-                        display: 'flex', justifyContent: 'space-between', marginTop: '10px',
-                        padding: '10px', background: '#e0f2fe', borderRadius: '4px', border: startersIds.length === 5 ? '2px solid #10b981' : '2px dashed #f59e0b'
-                    }}>
-                        <div>Titulares seleccionados: <strong>{startersIds.length} / 5</strong></div>
-                        <div>Capitán: <strong>{captainId ? allPlayers.find(p => p.id === captainId)?.nombre : 'N/A'}</strong></div>
-                    </div>
+                {/* STAFF INFO */}
+                <div style={{padding: '10px 15px', background: '#eff6ff', borderBottom: '1px solid #dbeafe', fontSize:'0.85rem'}}>
+                    <strong>Cuerpo Técnico:</strong> DT: {staff.entrenador} | AT: {staff.asistente}
                 </div>
 
-                {/* CONTADOR */}
-                <div style={{padding: '10px 15px', background: '#f3f4f6', borderBottom: '1px solid #ddd', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                    <span style={{fontWeight: 'bold', color: '#374151'}}>Selecciona los 5 Titulares y el Capitán:</span>
-                    <span style={{
-                        background: selectedIds.length === 12 ? '#ef4444' : selectedIds.length >= 5 ? '#10b981' : '#f59e0b',
-                        color: 'white', padding: '4px 12px', borderRadius: '20px', fontSize: '0.85rem', fontWeight: 'bold'
-                    }}>
-                        Total: {selectedIds.length} / 12
+                {/* CONTADORES */}
+                <div style={{padding: '10px 15px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display:'flex', justifyContent:'space-between', fontSize:'0.85rem'}}>
+                    <span style={{color: selectedIds.length >= 5 && selectedIds.length <= 12 ? 'green' : 'red', fontWeight:'bold'}}>
+                        Jugadores: {selectedIds.length} / 12
+                    </span>
+                    <span style={{color: startersIds.length === 5 ? 'green' : 'orange', fontWeight:'bold'}}>
+                        Titulares: {startersIds.length} / 5
+                    </span>
+                    <span style={{color: captainId ? 'green' : 'red', fontWeight:'bold'}}>
+                        Capitán: {captainId ? 'OK' : 'Falta'}
                     </span>
                 </div>
 
-                {/* LISTA DE JUGADORES */}
-                <div style={{flex: 1, overflowY: 'auto', padding: '15px'}}>
+                {/* LISTA JUGADORES */}
+                <div style={{flex: 1, overflowY: 'auto', padding: '10px'}}>
                     {allPlayers.map(p => {
                         const isSelected = selectedIds.includes(p.id);
                         const isStarter = startersIds.includes(p.id);
                         const isCaptain = captainId === p.id;
-                        const isSuspended = p.suspendido === true; // Detectar suspensión
+                        const isSuspended = p.suspendido === true;
 
                         return (
                             <div key={p.id} style={{
-                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                padding: '12px', borderRadius: '8px', cursor: isSuspended ? 'not-allowed' : 'pointer', marginBottom:'8px',
-                                border: isSuspended ? '2px solid #ef4444' : (isSelected ? '2px solid var(--primary)' : '1px solid #e5e7eb'),
+                                marginBottom:'8px', padding:'10px', borderRadius:'6px',
+                                border: isSuspended ? '1px solid #fca5a5' : (isSelected ? '2px solid #2563eb' : '1px solid #e2e8f0'),
                                 background: isSuspended ? '#fef2f2' : (isSelected ? '#eff6ff' : 'white'),
-                                opacity: isSuspended ? 0.6 : (isSelected ? 1 : 0.8)
+                                opacity: isSuspended ? 0.6 : 1
                             }}>
-                                {/* INFO */}
-                                <div onClick={() => togglePlayer(p)} style={{display: 'flex', alignItems: 'center', gap: '15px', flex:1}}>
+                                {/* FILA PRINCIPAL: CHECKBOX + NOMBRE + NUMERO */}
+                                <div onClick={() => togglePlayer(p)} style={{display:'flex', alignItems:'center', cursor: isSuspended ? 'not-allowed' : 'pointer'}}>
+                                    <div style={{fontSize:'1.2rem', marginRight:'10px'}}>
+                                        {isSuspended ? '⛔' : (isSelected ? '✅' : '⬜')}
+                                    </div>
                                     <div style={{
-                                        width: '30px', height: '30px', borderRadius: '50%', 
-                                        background: isSuspended ? '#ef4444' : (isSelected ? 'var(--primary)' : '#e5e7eb'),
-                                        color: isSuspended ? 'white' : (isSelected ? 'white' : '#6b7280'),
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold'
+                                        width:'30px', height:'30px', borderRadius:'50%', 
+                                        background: isSuspended ? '#ef4444' : '#1e40af', color:'white', 
+                                        display:'flex', justifyContent:'center', alignItems:'center', fontWeight:'bold', marginRight:'10px'
                                     }}>
                                         {p.numero}
                                     </div>
-                                    <div style={{display:'flex', flexDirection:'column'}}>
-                                        <span style={{fontWeight: isSelected ? 'bold' : 'normal', color: isSuspended ? '#991b1b' : '#1f2937'}}>
-                                            {p.nombre}
-                                        </span>
-                                        {isSuspended && <span style={{fontSize:'0.65rem', color:'#ef4444', fontWeight:'bold'}}>🚫 SUSPENDIDO</span>}
+                                    <div style={{fontWeight:'bold', color: isSuspended ? '#991b1b' : '#334155', flex:1}}>
+                                        {p.nombre} {isSuspended && <span style={{fontSize:'0.7rem', color:'red'}}>(SUSPENDIDO)</span>}
                                     </div>
                                 </div>
-                                
-                                {/* CONTROLES DE ROL (Solo si seleccionado y NO suspendido) */}
+
+                                {/* BOTONES EXTRA (SOLO SI ESTÁ SELECCIONADO) */}
                                 {isSelected && !isSuspended && (
-                                    <div style={{display:'flex', gap:'5px'}}>
-                                        <button 
-                                            onClick={() => toggleCaptain(p.id)}
-                                            style={{
-                                                padding:'5px 10px', fontSize:'0.75rem', fontWeight:'bold', borderRadius:'4px',
-                                                background: isCaptain ? '#f59e0b' : '#fef3c7',
-                                                color: isCaptain ? 'white' : '#92400e', border:'none', cursor:'pointer'
-                                            }}
-                                            title="Seleccionar Capitán"
-                                        >
-                                            {isCaptain ? '⭐ CAPITÁN' : 'HACER CAPITÁN'}
-                                        </button>
-                                        
+                                    <div style={{marginTop:'8px', display:'flex', gap:'8px', paddingLeft:'35px'}}>
                                         <button 
                                             onClick={() => toggleStarter(p.id)}
                                             style={{
-                                                padding:'5px 10px', fontSize:'0.75rem', fontWeight:'bold', borderRadius:'4px',
-                                                background: isStarter ? '#10b981' : '#d1fae5',
-                                                color: isStarter ? 'white' : '#065f46', border:'none', cursor:'pointer'
+                                                flex:1, padding:'6px', borderRadius:'4px', border:'none', fontSize:'0.75rem', fontWeight:'bold', cursor:'pointer',
+                                                background: isStarter ? '#16a34a' : '#dcfce7', color: isStarter ? 'white' : '#166534'
                                             }}
-                                            title="Marcar como Abridor (Titular)"
                                         >
-                                            {isStarter ? '✅ TITULAR' : 'HACER TITULAR'} ({startersIds.length}/5)
+                                            {isStarter ? 'TITULAR' : 'Hacer Titular'}
+                                        </button>
+                                        <button 
+                                            onClick={() => toggleCaptain(p.id)}
+                                            style={{
+                                                flex:1, padding:'6px', borderRadius:'4px', border:'none', fontSize:'0.75rem', fontWeight:'bold', cursor:'pointer',
+                                                background: isCaptain ? '#ca8a04' : '#fef9c3', color: isCaptain ? 'white' : '#854d0e'
+                                            }}
+                                        >
+                                            {isCaptain ? 'CAPITÁN' : 'Hacer Capitán'}
                                         </button>
                                     </div>
                                 )}
-                                
-                                {/* INDICADOR DE SELECCIÓN GENERAL */}
-                                <div onClick={() => togglePlayer(p)} style={{fontSize: '1.2rem', color: isSuspended ? '#ef4444' : (isSelected ? 'var(--primary)' : '#d1d5db'), marginLeft:'10px'}}>
-                                    {isSuspended ? '🚫' : (isSelected ? '☑️' : '⬜')}
-                                </div>
                             </div>
                         );
                     })}
                 </div>
 
                 {/* FOOTER */}
-                <div style={{padding: '20px', borderTop: '1px solid #eee', display: 'flex', gap: '10px', background: '#f9fafb', flexDirection:'column'}}>
-                    <div style={{fontSize:'0.8rem', color:'#ef4444', textAlign:'center', marginBottom:'5px', fontWeight:'bold'}}>
-                        ⚠️ ATENCIÓN: Al guardar, la lista se bloqueará permanentemente.
-                    </div>
-                    <div style={{display:'flex', gap:'10px'}}>
-                        <button onClick={onClose} className="btn btn-secondary" style={{flex: 1}}>Cancelar</button>
-                        <button 
-                            onClick={handleSave} 
-                            disabled={saving || startersIds.length !== 5 || !captainId} 
-                            className="btn btn-primary" 
-                            style={{flex: 2}}
-                        >
-                            {saving ? 'Enviando...' : '🔒 Enviar y Bloquear'}
-                        </button>
-                    </div>
+                <div style={{padding: '15px', borderTop: '1px solid #eee', background: '#f8fafc', display:'flex', gap:'10px'}}>
+                    <button onClick={onClose} className="btn btn-secondary" style={{flex:1}}>Cancelar</button>
+                    <button 
+                        onClick={handleSave} 
+                        className="btn btn-primary" 
+                        style={{flex:2}}
+                        disabled={saving || selectedIds.length < 5 || startersIds.length !== 5 || !captainId}
+                    >
+                        {saving ? 'Enviando...' : '🔒 Enviar Forma 5'}
+                    </button>
                 </div>
             </div>
         </div>
