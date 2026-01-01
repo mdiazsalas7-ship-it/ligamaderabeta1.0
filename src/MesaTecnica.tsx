@@ -38,17 +38,16 @@ interface MatchData {
     };
 }
 
-// --- 1. VISUALIZADOR DE PERIODO (CORREGIDO TEXTO TIEMPO EXTRA) ---
+// --- 1. VISUALIZADOR DE PERIODO ---
 const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: number, estatus: string, onNextQuarter: () => void }) => {
     
     const getButtonText = () => {
         if (estatus === 'programado') return "INICIAR PARTIDO";
-        
         switch (periodo) {
             case 1: return "FIN DEL PRIMER CUARTO >>";
             case 2: return "FIN DEL SEGUNDO CUARTO >>";
             case 3: return "FIN DEL TERCER CUARTO >>";
-            case 4: return "IR A TIEMPO EXTRA >>"; // <--- CAMBIO SOLICITADO
+            case 4: return "IR A TIEMPO EXTRA >>"; // Corrección: Lleva a extra
             default: return `FIN DE PRÓRROGA ${periodo - 4} >>`;
         }
     };
@@ -268,13 +267,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     snapStats.forEach(d => {
                         const s = d.data();
                         
-                        // --- REGLA FIBA (1T + 1U = EXPULSIÓN) ---
+                        // --- REGLA FIBA ART. 36 (CARGA DE DATOS) ---
                         const isDisqualified = 
                             s.faltasTotales >= 5 || 
                             s.faltasTecnicas >= 2 || 
                             s.faltasAntideportivas >= 2 || 
                             s.faltasDescalificantes >= 1 || 
-                            (s.faltasTecnicas >= 1 && s.faltasAntideportivas >= 1); 
+                            (s.faltasTecnicas >= 1 && s.faltasAntideportivas >= 1); // Combo 1T+1U
 
                         setStatsCache(prev => ({
                             ...prev,
@@ -355,13 +354,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             else if (action === 'falta_U') { newStats.faltasAntideportivas++; logText = `🛑 U: ${player.nombre}`; }
             else if (action === 'falta_D') { newStats.faltasDescalificantes++; logText = `⛔ D: ${player.nombre}`; }
             
-            // --- REGLA FIBA (1T + 1U = EXPULSIÓN) EN TIEMPO REAL ---
+            // --- REGLA FIBA ART. 36 (TIEMPO REAL) ---
             if (
                 newStats.faltasTotales >= 5 || 
                 newStats.faltasTecnicas >= 2 || 
                 newStats.faltasAntideportivas >= 2 || 
                 newStats.faltasDescalificantes >= 1 ||
-                (newStats.faltasTecnicas >= 1 && newStats.faltasAntideportivas >= 1) 
+                (newStats.faltasTecnicas >= 1 && newStats.faltasAntideportivas >= 1)
             ) { 
                 logText += " (EXPULSADO)"; 
                 newStats.expulsado = true; 
@@ -405,6 +404,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         setSubMode(null);
     };
 
+    // --- MANEJO DE CUARTOS (CORREGIDO) ---
     const handleNextQuarter = async () => {
         if (!matchData) return;
         
@@ -671,7 +671,33 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     <div style={{background:'#222', width:'90%', maxWidth:'500px', borderRadius:'10px', overflow:'hidden', border:'1px solid #444'}}>
                         <div style={{padding:'10px', background: benchModalOpen==='local'?'#1e3a8a':'#78350f', color:'white', fontWeight:'bold', textAlign:'center'}}>SELECCIONA ENTRANTE ({benchModalOpen.toUpperCase()})</div>
                         <div style={{padding:'10px', maxHeight:'60vh', overflowY:'auto', display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px'}}>
-                            {(benchModalOpen==='local' ? localBench : visitanteBench).map(p => <button key={p.id} onClick={() => { setSubMode({team: benchModalOpen!, playerIn: p}); setBenchModalOpen(null); }} style={{padding:'10px', background:'#333', border:'1px solid #555', color:'white', borderRadius:'6px', textAlign:'left'}}><div style={{fontWeight:'bold', fontSize:'0.9rem'}}>#{p.numero}</div><div style={{fontSize:'0.8rem'}}>{p.nombre}</div></button>)}
+                            {(benchModalOpen==='local' ? localBench : visitanteBench).map(p => {
+                                // --- CORRECCIÓN FINAL: BLOQUEAR EXPULSADOS EN EL BANCO ---
+                                const isExpelled = statsCache[p.id]?.expulsado === true;
+                                return (
+                                    <button 
+                                        key={p.id} 
+                                        disabled={isExpelled} 
+                                        onClick={() => { if(!isExpelled) { setSubMode({team: benchModalOpen!, playerIn: p}); setBenchModalOpen(null); } }} 
+                                        style={{
+                                            padding:'10px', 
+                                            background: isExpelled ? '#450a0a' : '#333', // Rojo oscuro
+                                            border: isExpelled ? '1px solid red' : '1px solid #555', 
+                                            color: isExpelled ? '#ef4444' : 'white', 
+                                            borderRadius:'6px', 
+                                            textAlign:'left',
+                                            cursor: isExpelled ? 'not-allowed' : 'pointer', // Cursor prohibido
+                                            opacity: isExpelled ? 0.6 : 1,
+                                            pointerEvents: isExpelled ? 'none' : 'auto' // Bloqueo físico
+                                        }}
+                                    >
+                                        <div style={{fontWeight:'bold', fontSize:'0.9rem'}}>
+                                            #{p.numero} {isExpelled && '(EXP)'}
+                                        </div>
+                                        <div style={{fontSize:'0.8rem'}}>{p.nombre}</div>
+                                    </button>
+                                );
+                            })}
                         </div>
                         <div style={{padding:'8px', textAlign:'center', background:'#111', borderTop:'1px solid #333'}}><button onClick={()=>setBenchModalOpen(null)} className="btn btn-secondary">CANCELAR</button></div>
                     </div>
