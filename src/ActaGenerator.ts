@@ -1,160 +1,177 @@
-import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
-// URL de tu imagen
-const LOGO_ONLINE = "https://i.postimg.cc/sDgyKfr4/nuevo_logo.png";
+// ✅ LOGO OFICIAL
+const LEAGUE_LOGO_URL = "https://i.postimg.cc/sDgyKfr4/nuevo_logo.png";
 
-const descargarLogoWeb = async (): Promise<string> => {
-  try {
-    const urlProxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(LOGO_ONLINE)}`;
-    const response = await fetch(urlProxy);
-    if (!response.ok) throw new Error("Fallo descarga");
-    const blob = await response.blob();
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.readAsDataURL(blob);
-    });
-  } catch (error) {
-    console.error("No se pudo cargar el logo:", error);
-    return "";
-  }
+const getBase64Image = async (url: string): Promise<string | null> => {
+    try {
+        const response = await fetch(url, { mode: 'cors' });
+        const blob = await response.blob();
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+        });
+    } catch (error) {
+        console.error("Error loading image:", error);
+        return null;
+    }
 };
 
-export const generarActaPDF = async (partido: any, statsLocal: any[], statsVisitante: any[]) => {
-  const doc = new jsPDF();
+export const generarActaPDF = async (matchData: any, statsA: any[], statsB: any[]) => {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.width;
+    const pageHeight = doc.internal.pageSize.height;
 
-  // --- 1. ENCABEZADO ROJO (FONDO) ---
-  doc.setFillColor(185, 28, 28); 
-  doc.rect(0, 0, 210, 40, 'F');
+    // 1. CARGAR LOGO
+    let leagueLogoImg = await getBase64Image(LEAGUE_LOGO_URL);
 
-  // --- 2. CÍRCULO BLANCO (SE DIBUJA SIEMPRE PRIMERO) ---
-  // Esto asegura que si falla la imagen, al menos veas el círculo
-  doc.setFillColor(255, 255, 255);
-  doc.circle(25, 20, 14, 'F'); // Círculo relleno blanco
-  doc.setDrawColor(255, 255, 255);
-  doc.setLineWidth(0.5);
-  doc.circle(25, 20, 14, 'S'); // Borde blanco
+    // 2. CALCULAR TOTALES
+    const calcTotals = (stats: any[]) => stats.reduce((acc, s) => ({
+        pts: acc.pts + s.puntos,
+        reb: acc.reb + s.rebotes,
+        tri: acc.tri + s.triples,
+        fal: acc.fal + s.faltas
+    }), { pts:0, reb:0, tri:0, fal:0 });
 
-  // --- 3. INTENTO DE CARGAR IMAGEN ---
-  try {
-    const imgData = await descargarLogoWeb();
+    const totalsA = calcTotals(statsA);
+    const totalsB = calcTotals(statsB);
 
-    if (imgData) {
-      doc.saveGraphicsState();
-      
-      // Creamos el recorte circular solo para la imagen
-      doc.beginPath();
-      doc.arc(25, 20, 13, 0, 2 * Math.PI, false);
-      doc.clip();
-      
-      // Ponemos la imagen encima del círculo blanco
-      doc.addImage(imgData, "PNG", 12, 7, 26, 26);
-      
-      doc.restoreGraphicsState();
-    }
-  } catch (e) {
-    // Si falla, no pasa nada, ya el círculo blanco está dibujado
-    console.log("Generando PDF sin logo (error de carga)");
-  }
+    // --- ENCABEZADO ---
+    autoTable(doc, {
+        body: [
+            [
+                { content: matchData.equipoLocalNombre, styles: { halign: 'center', fontSize: 14, fontStyle: 'bold', textColor: [96, 165, 250] } },
+                { content: `${matchData.marcadorLocal} - ${matchData.marcadorVisitante}`, styles: { halign: 'center', fontSize: 20, fontStyle: 'bold', textColor: [255, 255, 255] } },
+                { content: matchData.equipoVisitanteNombre, styles: { halign: 'center', fontSize: 14, fontStyle: 'bold', textColor: [251, 191, 36] } }
+            ],
+            [
+                { content: `Faltas: ${matchData.faltasLocal} | TM: ${matchData.tiemposLocal}`, styles: { halign: 'center', textColor: [150, 150, 150], fontSize: 9 } },
+                { content: matchData.estatus === 'finalizado' ? 'FINALIZADO' : 'EN PROGRESO', styles: { halign: 'center', fontSize: 8, textColor: [200, 200, 200] } },
+                { content: `Faltas: ${matchData.faltasVisitante} | TM: ${matchData.tiemposVisitante}`, styles: { halign: 'center', textColor: [150, 150, 150], fontSize: 9 } }
+            ]
+        ],
+        theme: 'plain',
+        styles: { cellPadding: 1 },
+        startY: 35,
+        margin: { top: 35 },
+        didDrawPage: (data) => {
+            // Fondo Negro
+            doc.setFillColor(0, 0, 0);
+            doc.rect(0, 0, pageWidth, 35, 'F');
 
-  // --- 4. TEXTOS (RESTO DEL CÓDIGO) ---
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(22);
-  doc.setFont('helvetica', 'bold');
-  doc.text("LIGA MADERA 15", 55, 18);
-  
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text("ACTA OFICIAL DE PARTIDO", 55, 25);
-  doc.text(`Fecha: ${partido.fechaAsignada || 'S/F'} | Cancha: ${partido.cancha || 'Principal'}`, 55, 32);
+            // --- LOGO (Aumentado de tamaño) ---
+            if (leagueLogoImg) {
+                // Antes: 28x30 -> Ahora: 34x34 (Un poco más grande)
+                // Posición X: 8 (un poco más a la izquierda), Y: 1 (casi al borde superior)
+                doc.addImage(leagueLogoImg, 'PNG', 8, 1, 34, 34);
+            }
 
-  // --- 5. RESULTADOS ---
-  doc.setTextColor(0, 0, 0);
-  doc.setFontSize(14);
-  doc.text("RESULTADO FINAL", 105, 55, { align: "center" });
+            // Títulos
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(16);
+            doc.setFont("helvetica", "bold");
+            // Movido un poco a la derecha (X=48) para que no choque con el logo más grande
+            doc.text("LIGA MADERA 15", 48, 15); 
+            
+            doc.setFontSize(9);
+            doc.setFont("helvetica", "normal");
+            doc.setTextColor(180, 180, 180);
+            doc.text("ACTA OFICIAL DE JUEGO", 48, 22);
 
-  doc.setFontSize(36);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`${partido.marcadorLocal} - ${partido.marcadorVisitante}`, 105, 70, { align: "center" });
-  
-  doc.setFontSize(12);
-  doc.text(partido.equipoLocalNombre, 60, 80, { align: "center" });
-  doc.text(partido.equipoVisitanteNombre, 150, 80, { align: "center" });
-
-  // --- 6. TABLAS ---
-  const c = partido.cuartos || {};
-  const bodyCuartos = [
-    [partido.equipoLocalNombre, c.q1?.local || 0, c.q2?.local || 0, c.q3?.local || 0, c.q4?.local || 0, partido.marcadorLocal],
-    [partido.equipoVisitanteNombre, c.q1?.visitante || 0, c.q2?.visitante || 0, c.q3?.visitante || 0, c.q4?.visitante || 0, partido.marcadorVisitante]
-  ];
-
-  (doc as any).autoTable({
-    startY: 85,
-    head: [['EQUIPO', '1Q', '2Q', '3Q', '4Q', 'TOTAL']],
-    body: bodyCuartos,
-    theme: 'grid',
-    headStyles: { fillColor: [40, 40, 40], halign: 'center' },
-    styles: { halign: 'center', fontSize: 10 },
-    margin: { left: 30, right: 30 }
-  });
-
-  // Estadísticas
-  const tableStartY = (doc as any).lastAutoTable.finalY + 12;
-  doc.setFontSize(11);
-  doc.text("DESGLOSE POR JUGADORES", 105, tableStartY, { align: 'center' });
-
-  const procesarFilas = (stats: any[]) => {
-    let pts = 0, reb = 0, tri = 0, fal = 0;
-    const filas = stats.map(s => {
-      pts += Number(s.puntos || 0);
-      reb += Number(s.rebotes || 0);
-      tri += Number(s.triples || 0);
-      fal += Number(s.faltas || 0);
-      return [s.numero, s.nombre.substring(0, 15), s.triples || 0, s.rebotes || 0, s.puntos || 0, s.faltas || 0];
+            // Datos Derecha
+            doc.setFontSize(8);
+            const fecha = matchData.fechaAsignada ? new Date(matchData.fechaAsignada).toLocaleDateString() : new Date().toLocaleDateString();
+            doc.text(`FECHA: ${fecha}`, pageWidth - 10, 12, { align: 'right' });
+            
+            // --- CANCHA FIJA: MADERA 15 ---
+            doc.text(`CANCHA: Madera 15`, pageWidth - 10, 17, { align: 'right' });
+            
+            doc.text(`ID: ${matchData.id.substring(0, 6)}`, pageWidth - 10, 22, { align: 'right' });
+        }
     });
-    filas.push([{ content: 'TOTALES', colSpan: 2, styles: { fontStyle: 'bold', fillColor: [240, 240, 240] } }, tri, reb, pts, fal]);
-    return filas;
-  };
 
-  const colStyles = { 
-    0: { cellWidth: 8, halign: 'center' }, 
-    2: { cellWidth: 10, halign: 'center' }, 
-    3: { cellWidth: 10, halign: 'center' }, 
-    4: { cellWidth: 10, halign: 'center', fontStyle: 'bold' }, 
-    5: { cellWidth: 10, halign: 'center' } 
-  };
+    let finalY = (doc as any).lastAutoTable.finalY + 5;
 
-  (doc as any).autoTable({
-    startY: tableStartY + 5,
-    head: [['#', 'LOCAL', '3P', 'REB', 'PTS', 'F']],
-    body: procesarFilas(statsLocal),
-    theme: 'striped',
-    headStyles: { fillColor: [30, 58, 138] },
-    styles: { fontSize: 8 },
-    columnStyles: colStyles,
-    margin: { left: 10, right: 110 }
-  });
+    // --- RESUMEN CUARTOS ---
+    if (matchData.cuartos) {
+        const qData = matchData.cuartos;
+        autoTable(doc, {
+            head: [['EQUIPO', '1C', '2C', '3C', '4C', 'T']],
+            body: [
+                [matchData.equipoLocalNombre, qData.q1?.local||0, qData.q2?.local||0, qData.q3?.local||0, qData.q4?.local||0, matchData.marcadorLocal],
+                [matchData.equipoVisitanteNombre, qData.q1?.visitante||0, qData.q2?.visitante||0, qData.q3?.visitante||0, qData.q4?.visitante||0, matchData.marcadorVisitante],
+            ],
+            startY: finalY,
+            theme: 'grid',
+            headStyles: { fillColor: [50, 50, 50], textColor: 255, fontSize: 8, halign: 'center', minCellHeight: 6 },
+            bodyStyles: { fontSize: 8, halign: 'center', minCellHeight: 6 },
+            columnStyles: { 0: { halign: 'left', fontStyle: 'bold', cellWidth: 40 }, 5: { fontStyle: 'bold' } },
+            margin: { left: 15, right: 15 }
+        });
+        finalY = (doc as any).lastAutoTable.finalY + 8;
+    }
 
-  (doc as any).autoTable({
-    startY: tableStartY + 5,
-    head: [['#', 'VISITANTE', '3P', 'REB', 'PTS', 'F']],
-    body: procesarFilas(statsVisitante),
-    theme: 'striped',
-    headStyles: { fillColor: [245, 158, 11] },
-    styles: { fontSize: 8 },
-    columnStyles: colStyles,
-    margin: { left: 115, right: 10 }
-  });
+    // --- TABLAS JUGADORES ---
+    const generarTablaStats = (titulo: string, stats: any[], totales: any, colorHeader: [number, number, number], startY: number) => {
+        doc.setFontSize(10);
+        doc.setTextColor(0, 0, 0);
+        doc.setFont("helvetica", "bold");
+        
+        doc.setFillColor(colorHeader[0], colorHeader[1], colorHeader[2]);
+        doc.rect(14, startY - 4, 3, 3, 'F');
+        doc.text(titulo.toUpperCase(), 20, startY - 1);
 
-  const firmaY = (doc as any).lastAutoTable.finalY + 35;
-  doc.setLineWidth(0.5);
-  doc.line(30, firmaY, 90, firmaY);
-  doc.line(120, firmaY, 180, firmaY);
-  
-  doc.setFontSize(9);
-  doc.text("Firma Árbitro Principal", 60, firmaY + 5, { align: "center" });
-  doc.text("Firma Mesa Técnica", 150, firmaY + 5, { align: "center" });
+        autoTable(doc, {
+            head: [['#', 'JUGADOR', 'PTS', '3PT', 'REB', 'FAL']],
+            body: [
+                ...stats.map(s => [s.numero, s.nombre, s.puntos, s.triples, s.rebotes, s.faltas]),
+                ['', {content:'TOTALES', styles:{fontStyle:'bold'}}, 
+                 {content:totales.pts, styles:{fontStyle:'bold'}},
+                 {content:totales.tri, styles:{fontStyle:'bold'}},
+                 {content:totales.reb, styles:{fontStyle:'bold'}},
+                 {content:totales.fal, styles:{fontStyle:'bold', textColor:[200, 0, 0]}}
+                ]
+            ],
+            startY: startY,
+            theme: 'striped',
+            headStyles: { fillColor: colorHeader, textColor: 255, fontSize: 8, halign: 'center', minCellHeight: 6 },
+            bodyStyles: { fontSize: 8, halign: 'center', cellPadding: 1 },
+            columnStyles: { 
+                0: { cellWidth: 8 }, 
+                1: { halign: 'left', cellWidth: 'auto' }, 
+                2: { cellWidth: 12, fontStyle: 'bold' }, 
+                3: { cellWidth: 12 }, 
+                4: { cellWidth: 12 }, 
+                5: { cellWidth: 12, textColor: [200, 0, 0] } 
+            },
+            footStyles: { fontStyle: 'bold', fillColor: [230, 230, 230], textColor: 0 }
+        });
+        return (doc as any).lastAutoTable.finalY;
+    };
 
-  doc.save(`Acta_${partido.equipoLocalNombre}_vs_${partido.equipoVisitanteNombre}.pdf`);
+    finalY = generarTablaStats(matchData.equipoLocalNombre, statsA, totalsA, [30, 58, 138], finalY + 2);
+    finalY = generarTablaStats(matchData.equipoVisitanteNombre, statsB, totalsB, [180, 83, 9], finalY + 8);
+
+    // --- FIRMAS ---
+    if (finalY > pageHeight - 30) {
+        doc.addPage();
+        finalY = 20;
+    } else {
+        finalY = Math.max(finalY + 20, pageHeight - 40);
+    }
+
+    doc.setDrawColor(0);
+    doc.setLineWidth(0.5);
+    
+    doc.line(40, finalY, 90, finalY);
+    doc.setFontSize(8);
+    doc.setTextColor(100);
+    doc.text("ÁRBITRO PRINCIPAL", 65, finalY + 5, { align: 'center' });
+
+    doc.line(120, finalY, 170, finalY);
+    doc.text("MESA TÉCNICA / OPERADOR", 145, finalY + 5, { align: 'center' });
+
+    doc.save(`ACTA_${matchData.equipoLocalNombre}_vs_${matchData.equipoVisitanteNombre}.pdf`);
 };
