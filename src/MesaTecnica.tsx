@@ -38,18 +38,16 @@ interface MatchData {
     };
 }
 
-// --- 1. VISUALIZADOR DE PERIODO (CORREGIDO PARA TEXTOS EXACTOS) ---
+// --- 1. VISUALIZADOR DE PERIODO (CORREGIDO: TEXTOS EXACTOS) ---
 const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: number, estatus: string, onNextQuarter: () => void }) => {
     
-    // Lógica para mostrar el texto exacto según el cuarto
     const getButtonText = () => {
         if (estatus === 'programado') return "INICIAR PARTIDO";
-        
         switch (periodo) {
             case 1: return "FIN DEL PRIMER CUARTO >>";
             case 2: return "FIN DEL SEGUNDO CUARTO >>";
             case 3: return "FIN DEL TERCER CUARTO >>";
-            case 4: return "FIN DEL CUARTO CUARTO (IR A EXTRA) >>"; // Permite ir a prórroga
+            case 4: return "FIN DEL CUARTO CUARTO (IR A EXTRA) >>"; // No finaliza, va a extra
             default: return `FIN DE PRÓRROGA ${periodo - 4} >>`;
         }
     };
@@ -67,14 +65,8 @@ const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: numb
                     className="btn" 
                     style={{
                         background: estatus === 'programado' ? '#10b981' : '#f59e0b', 
-                        color:'black', 
-                        fontWeight:'bold', 
-                        padding:'10px 20px', 
-                        fontSize:'0.9rem', 
-                        border:'none', 
-                        borderRadius:'6px', 
-                        cursor:'pointer',
-                        whiteSpace: 'nowrap'
+                        color:'black', fontWeight:'bold', padding:'10px 20px', fontSize:'0.9rem', 
+                        border:'none', borderRadius:'6px', cursor:'pointer', whiteSpace: 'nowrap'
                     }}
                 >
                     {getButtonText()}
@@ -274,6 +266,15 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     const snapStats = await getDocs(qStats);
                     snapStats.forEach(d => {
                         const s = d.data();
+                        
+                        // --- CORRECCIÓN FIBA ART. 36 (CARGA DE DATOS) ---
+                        const isDisqualified = 
+                            s.faltasTotales >= 5 || 
+                            s.faltasTecnicas >= 2 || 
+                            s.faltasAntideportivas >= 2 || 
+                            s.faltasDescalificantes >= 1 || 
+                            (s.faltasTecnicas >= 1 && s.faltasAntideportivas >= 1); // <--- REGLA 1T+1U
+
                         setStatsCache(prev => ({
                             ...prev,
                             [s.jugadorId]: {
@@ -284,7 +285,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                                 faltasAntideportivas: s.faltasAntideportivas || 0,
                                 faltasDescalificantes: s.faltasDescalificantes || 0,
                                 faltasTotales: s.faltasTotales || 0,
-                                expulsado: (s.faltasTotales >= 5 || s.faltasTecnicas >= 2 || s.faltasAntideportivas >= 2 || s.faltasDescalificantes >= 1)
+                                expulsado: isDisqualified
                             }
                         }));
                     });
@@ -352,7 +353,21 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             else if (action === 'falta_T') { newStats.faltasTecnicas++; logText = `⚠️ T: ${player.nombre}`; }
             else if (action === 'falta_U') { newStats.faltasAntideportivas++; logText = `🛑 U: ${player.nombre}`; }
             else if (action === 'falta_D') { newStats.faltasDescalificantes++; logText = `⛔ D: ${player.nombre}`; }
-            if (newStats.faltasTotales >= 5 || newStats.faltasTecnicas >= 2 || newStats.faltasAntideportivas >= 2 || newStats.faltasDescalificantes >= 1) { logText += " (EXPULSADO)"; newStats.expulsado = true; alert(`🟥 EXPULSIÓN: ${player.nombre}`); }
+            
+            // --- CORRECCIÓN FIBA ART. 36 (TIEMPO REAL) ---
+            const isDisqualified = 
+                newStats.faltasTotales >= 5 || 
+                newStats.faltasTecnicas >= 2 || 
+                newStats.faltasAntideportivas >= 2 || 
+                newStats.faltasDescalificantes >= 1 || 
+                (newStats.faltasTecnicas >= 1 && newStats.faltasAntideportivas >= 1); // <--- REGLA 1T+1U
+
+            if (isDisqualified) { 
+                logText += " (EXPULSADO)"; 
+                newStats.expulsado = true; 
+                alert(`🟥 EXPULSIÓN: ${player.nombre} (Regla FIBA aplicada)`); 
+            }
+
         } else { logText = `🖐️ Rebote: ${player.nombre}`; }
         setStatsCache(prev => ({ ...prev, [player.id]: newStats }));
         await addLog(logText, action.startsWith('falta') ? 'foul' : action === 'puntos' ? 'score' : 'stat', team, player.id, action, val);
@@ -390,11 +405,10 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         setSubMode(null);
     };
 
-    // --- MANEJO DE CUARTOS (Avance de periodo) ---
+    // --- MANEJO DE CUARTOS (CORREGIDO) ---
     const handleNextQuarter = async () => {
         if (!matchData) return;
         
-        // Iniciar partido si está programado
         if (matchData.estatus === 'programado') { 
             await updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo', cuarto: 1 });
             setPuntosInicioCuarto({ local: 0, visitante: 0 });
@@ -402,7 +416,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             return; 
         }
 
-        // Determinar mensaje de confirmación adecuado
         const nextQ = matchData.cuarto + 1;
         const confirmMsg = nextQ > 4 
             ? `¿Finalizó el empate? Iniciar PRÓRROGA (Q${nextQ})`
@@ -410,7 +423,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
         if (!window.confirm(confirmMsg)) return;
 
-        // Calcular puntos del cuarto actual
         const puntosHechosLocal = matchData.marcadorLocal - puntosInicioCuarto.local;
         const puntosHechosVisitante = matchData.marcadorVisitante - puntosInicioCuarto.visitante;
 
@@ -422,11 +434,10 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             [`cuartos.${qKey}`]: { local: puntosHechosLocal, visitante: puntosHechosVisitante }
         };
 
-        // Reglas de reinicio de tiempos fuera (FIBA)
-        if (nextQ === 3) { // Inicio de 2da Mitad (se renuevan a 3)
+        if (nextQ === 3) { // 2da Mitad
             updatePayload.tiemposLocal = 3; 
             updatePayload.tiemposVisitante = 3; 
-        } else if (nextQ > 4) { // Inicio de Prórroga (se da 1 por cada extra)
+        } else if (nextQ > 4) { // Prórroga
             updatePayload.tiemposLocal = 1; 
             updatePayload.tiemposVisitante = 1; 
         }
@@ -441,49 +452,44 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         addLog(logMsg, 'period', 'system');
     };
 
-    // --- LÓGICA CORREGIDA DE TIEMPOS FUERA (FIBA) ---
+    // --- TIEMPOS FUERA (CORREGIDO: LÍMITES FIBA + NO NEGATIVOS) ---
     const handleTimeoutAdjustment = async (team: 'local'|'visitante', change: number) => {
         if (!matchData) return;
 
-        // 1. Obtener valor actual
+        // 1. Valor actual
         const current = team === 'local' ? (matchData.tiemposLocal ?? 0) : (matchData.tiemposVisitante ?? 0);
         
-        // 2. Calcular nuevo valor
+        // 2. Nuevo valor calculado
         const newValue = current + change;
 
-        // 3. Determinar LÍMITE MÁXIMO según el cuarto actual (Reglas FIBA)
+        // 3. Determinar máximo permitido según el cuarto
         const q = matchData.cuarto || 1;
         let maxTimeouts = 0;
 
         if (q <= 2) {
-            maxTimeouts = 2; // Primera mitad (Q1 + Q2) = 2 tiempos
+            maxTimeouts = 2; // Primera mitad
         } else if (q <= 4) {
-            maxTimeouts = 3; // Segunda mitad (Q3 + Q4) = 3 tiempos
+            maxTimeouts = 3; // Segunda mitad
         } else {
-            maxTimeouts = 1; // Prórrogas = 1 tiempo
+            maxTimeouts = 1; // Prórrogas
         }
 
-        // 4. VALIDACIONES
-        // Evitar negativos
-        if (newValue < 0) return; 
-
-        // Evitar superar el máximo permitido
+        // 4. Validaciones
+        if (newValue < 0) return; // No bajar de 0
         if (newValue > maxTimeouts) {
             alert(`⚠️ El límite de tiempos fuera para este periodo es ${maxTimeouts}.`);
             return;
         }
 
-        // 5. Guardar en BD
+        // 5. Guardar
         const field = team === 'local' ? 'tiemposLocal' : 'tiemposVisitante';
         const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
-        
         const updates: any = { [field]: newValue };
 
-        // Log si se gastó un tiempo
         if (change < 0) {
             const newEvent: GameEvent = { 
                 id: Date.now().toString(), 
-                text: `🛑 TIEMPO MUERTO: ${teamName} (Restantes: ${newValue})`, 
+                text: `🛑 TIEMPO MUERTO: ${teamName} (Restan: ${newValue})`, 
                 time: formatTimeForLog(), 
                 team, 
                 type: 'timeout', 
@@ -495,20 +501,39 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await updateDoc(doc(db, 'calendario', matchData.id), updates);
     };
 
-    // --- FINALIZAR PARTIDO (Botón Verde Inferior) ---
+    // --- FINALIZAR PARTIDO (CORREGIDO: PUNTOS A FAVOR/CONTRA) ---
     const handleFinalize = async () => {
         if (!matchData || !window.confirm("¿FINALIZAR PARTIDO DEFINITIVAMENTE?")) return;
         
+        // Guardar cuarto actual
         const puntosHechosLocal = matchData.marcadorLocal - puntosInicioCuarto.local;
         const puntosHechosVisitante = matchData.marcadorVisitante - puntosInicioCuarto.visitante;
         const qKey = `q${matchData.cuarto}`;
 
+        // Determinar ganador
         const localWins = matchData.marcadorLocal > matchData.marcadorVisitante;
         const winnerId = localWins ? matchData.equipoLocalId : matchData.equipoVisitanteId;
         const loserId = localWins ? matchData.equipoVisitanteId : matchData.equipoLocalId;
+
+        // Asignar puntos correctos
+        const winnerScore = localWins ? matchData.marcadorLocal : matchData.marcadorVisitante;
+        const loserScore = localWins ? matchData.marcadorVisitante : matchData.marcadorLocal;
         
-        await updateDoc(doc(db, 'equipos', winnerId), { victorias: increment(1), puntos: increment(2), puntos_favor: increment(matchData.marcadorLocal), puntos_contra: increment(matchData.marcadorVisitante) });
-        await updateDoc(doc(db, 'equipos', loserId), { derrotas: increment(1), puntos: increment(1), puntos_favor: increment(matchData.marcadorVisitante), puntos_contra: increment(matchData.marcadorLocal) });
+        // Update Ganador
+        await updateDoc(doc(db, 'equipos', winnerId), { 
+            victorias: increment(1), 
+            puntos: increment(2), 
+            puntos_favor: increment(winnerScore), 
+            puntos_contra: increment(loserScore) 
+        });
+
+        // Update Perdedor
+        await updateDoc(doc(db, 'equipos', loserId), { 
+            derrotas: increment(1), 
+            puntos: increment(1), 
+            puntos_favor: increment(loserScore), 
+            puntos_contra: increment(winnerScore) 
+        });
         
         await updateDoc(doc(db, 'calendario', matchData.id), { 
             estatus: 'finalizado',
