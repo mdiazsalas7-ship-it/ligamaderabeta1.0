@@ -38,16 +38,17 @@ interface MatchData {
     };
 }
 
-// --- 1. VISUALIZADOR DE PERIODO (CORREGIDO: TEXTOS EXACTOS) ---
+// --- 1. VISUALIZADOR DE PERIODO (CORREGIDO TEXTO TIEMPO EXTRA) ---
 const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: number, estatus: string, onNextQuarter: () => void }) => {
     
     const getButtonText = () => {
         if (estatus === 'programado') return "INICIAR PARTIDO";
+        
         switch (periodo) {
             case 1: return "FIN DEL PRIMER CUARTO >>";
             case 2: return "FIN DEL SEGUNDO CUARTO >>";
             case 3: return "FIN DEL TERCER CUARTO >>";
-            case 4: return "FIN DEL CUARTO CUARTO (IR A EXTRA) >>"; // No finaliza, va a extra
+            case 4: return "IR A TIEMPO EXTRA >>"; // <--- CAMBIO SOLICITADO
             default: return `FIN DE PRÓRROGA ${periodo - 4} >>`;
         }
     };
@@ -267,13 +268,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     snapStats.forEach(d => {
                         const s = d.data();
                         
-                        // --- CORRECCIÓN FIBA ART. 36 (CARGA DE DATOS) ---
+                        // --- REGLA FIBA (1T + 1U = EXPULSIÓN) ---
                         const isDisqualified = 
                             s.faltasTotales >= 5 || 
                             s.faltasTecnicas >= 2 || 
                             s.faltasAntideportivas >= 2 || 
                             s.faltasDescalificantes >= 1 || 
-                            (s.faltasTecnicas >= 1 && s.faltasAntideportivas >= 1); // <--- REGLA 1T+1U
+                            (s.faltasTecnicas >= 1 && s.faltasAntideportivas >= 1); 
 
                         setStatsCache(prev => ({
                             ...prev,
@@ -354,18 +355,17 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             else if (action === 'falta_U') { newStats.faltasAntideportivas++; logText = `🛑 U: ${player.nombre}`; }
             else if (action === 'falta_D') { newStats.faltasDescalificantes++; logText = `⛔ D: ${player.nombre}`; }
             
-            // --- CORRECCIÓN FIBA ART. 36 (TIEMPO REAL) ---
-            const isDisqualified = 
+            // --- REGLA FIBA (1T + 1U = EXPULSIÓN) EN TIEMPO REAL ---
+            if (
                 newStats.faltasTotales >= 5 || 
                 newStats.faltasTecnicas >= 2 || 
                 newStats.faltasAntideportivas >= 2 || 
-                newStats.faltasDescalificantes >= 1 || 
-                (newStats.faltasTecnicas >= 1 && newStats.faltasAntideportivas >= 1); // <--- REGLA 1T+1U
-
-            if (isDisqualified) { 
+                newStats.faltasDescalificantes >= 1 ||
+                (newStats.faltasTecnicas >= 1 && newStats.faltasAntideportivas >= 1) 
+            ) { 
                 logText += " (EXPULSADO)"; 
                 newStats.expulsado = true; 
-                alert(`🟥 EXPULSIÓN: ${player.nombre} (Regla FIBA aplicada)`); 
+                alert(`🟥 EXPULSIÓN: ${player.nombre} (Regla FIBA Aplicada)`); 
             }
 
         } else { logText = `🖐️ Rebote: ${player.nombre}`; }
@@ -405,7 +405,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         setSubMode(null);
     };
 
-    // --- MANEJO DE CUARTOS (CORREGIDO) ---
     const handleNextQuarter = async () => {
         if (!matchData) return;
         
@@ -452,36 +451,26 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         addLog(logMsg, 'period', 'system');
     };
 
-    // --- TIEMPOS FUERA (CORREGIDO: LÍMITES FIBA + NO NEGATIVOS) ---
+    // --- TIEMPOS FUERA (CORREGIDO: NO -1) ---
     const handleTimeoutAdjustment = async (team: 'local'|'visitante', change: number) => {
         if (!matchData) return;
 
-        // 1. Valor actual
         const current = team === 'local' ? (matchData.tiemposLocal ?? 0) : (matchData.tiemposVisitante ?? 0);
-        
-        // 2. Nuevo valor calculado
         const newValue = current + change;
 
-        // 3. Determinar máximo permitido según el cuarto
+        // Lógica de Máximos FIBA
         const q = matchData.cuarto || 1;
         let maxTimeouts = 0;
+        if (q <= 2) maxTimeouts = 2; // 1ra Mitad
+        else if (q <= 4) maxTimeouts = 3; // 2da Mitad
+        else maxTimeouts = 1; // Prórrogas
 
-        if (q <= 2) {
-            maxTimeouts = 2; // Primera mitad
-        } else if (q <= 4) {
-            maxTimeouts = 3; // Segunda mitad
-        } else {
-            maxTimeouts = 1; // Prórrogas
-        }
-
-        // 4. Validaciones
-        if (newValue < 0) return; // No bajar de 0
+        if (newValue < 0) return; // PROHIBIDO BAJAR DE 0
         if (newValue > maxTimeouts) {
             alert(`⚠️ El límite de tiempos fuera para este periodo es ${maxTimeouts}.`);
             return;
         }
 
-        // 5. Guardar
         const field = team === 'local' ? 'tiemposLocal' : 'tiemposVisitante';
         const teamName = team === 'local' ? matchData.equipoLocalNombre : matchData.equipoVisitanteNombre;
         const updates: any = { [field]: newValue };
@@ -489,7 +478,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         if (change < 0) {
             const newEvent: GameEvent = { 
                 id: Date.now().toString(), 
-                text: `🛑 TIEMPO MUERTO: ${teamName} (Restan: ${newValue})`, 
+                text: `🛑 TIEMPO MUERTO: ${teamName} (Restantes: ${newValue})`, 
                 time: formatTimeForLog(), 
                 team, 
                 type: 'timeout', 
@@ -501,25 +490,24 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await updateDoc(doc(db, 'calendario', matchData.id), updates);
     };
 
-    // --- FINALIZAR PARTIDO (CORREGIDO: PUNTOS A FAVOR/CONTRA) ---
+    // --- FINALIZAR PARTIDO (CORREGIDO: PUNTOS TABLA) ---
     const handleFinalize = async () => {
         if (!matchData || !window.confirm("¿FINALIZAR PARTIDO DEFINITIVAMENTE?")) return;
         
-        // Guardar cuarto actual
         const puntosHechosLocal = matchData.marcadorLocal - puntosInicioCuarto.local;
         const puntosHechosVisitante = matchData.marcadorVisitante - puntosInicioCuarto.visitante;
         const qKey = `q${matchData.cuarto}`;
 
-        // Determinar ganador
+        // 1. Determinar ganador
         const localWins = matchData.marcadorLocal > matchData.marcadorVisitante;
         const winnerId = localWins ? matchData.equipoLocalId : matchData.equipoVisitanteId;
         const loserId = localWins ? matchData.equipoVisitanteId : matchData.equipoLocalId;
 
-        // Asignar puntos correctos
+        // 2. Definir puntos EXACTOS
         const winnerScore = localWins ? matchData.marcadorLocal : matchData.marcadorVisitante;
         const loserScore = localWins ? matchData.marcadorVisitante : matchData.marcadorLocal;
         
-        // Update Ganador
+        // 3. Actualizar Ganador (Recibe sus puntos a favor y los del perdedor en contra)
         await updateDoc(doc(db, 'equipos', winnerId), { 
             victorias: increment(1), 
             puntos: increment(2), 
@@ -527,7 +515,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             puntos_contra: increment(loserScore) 
         });
 
-        // Update Perdedor
+        // 4. Actualizar Perdedor (Recibe sus puntos a favor y los del ganador en contra)
         await updateDoc(doc(db, 'equipos', loserId), { 
             derrotas: increment(1), 
             puntos: increment(1), 
@@ -599,6 +587,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
     if (!matchData) return <div style={{padding:'50px', color:'white'}}>Cargando...</div>;
 
+    // --- RENDERIZADO PRINCIPAL CON BOTONES CORREGIDOS ---
     return (
         <div style={{background:'#121212', height:'100vh', color:'white', display:'flex', flexDirection:'column', overflow:'hidden'}}>
             <style>{`.btn-stat { flex:1; padding:6px 0; font-size:0.75rem; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#2563eb; color:white; transition: opacity 0.1s; }.btn-stat:active { transform:scale(0.95); opacity:0.8; }.clock-btn { background:#333; color:white; border:1px solid #555; padding:4px 8px; cursor:pointer; font-size:0.75rem; border-radius:3px; font-weight:bold; backdrop-filter: blur(4px); background: rgba(50,50,50,0.8); }.bonus-indicator { font-size: 0.8rem; background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-top: 5px; animation: pulse 2s infinite; display:inline-block; box-shadow: 0 0 10px #ef4444; }.timeout-btn { background: #d97706; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; cursor: pointer; margin-top: 5px; display: block; width: 100%; transition: background 0.2s; }.timeout-btn:disabled { background: #555; color: #999; cursor: not-allowed; }`}</style>
@@ -610,7 +599,11 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     <div style={{fontSize:'0.8rem', color:'#ccc'}}>FALTAS: {matchData.faltasLocal}</div>
                     {matchData.faltasLocal >= 5 && <div className="bonus-indicator">BONUS</div>}
                     <div style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'5px', marginTop:'5px'}}>
-                        <button onClick={()=>handleTimeoutAdjustment('local', -1)} style={{background:'#d97706', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor:'pointer'}}>-</button>
+                        <button 
+                            onClick={()=>handleTimeoutAdjustment('local', -1)} 
+                            disabled={matchData.tiemposLocal <= 0} // BLOQUEO VISUAL
+                            style={{background: matchData.tiemposLocal <= 0 ? '#555' : '#d97706', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor: matchData.tiemposLocal <= 0 ? 'not-allowed' : 'pointer'}}
+                        >-</button>
                         <span style={{color:'white', fontWeight:'bold', fontSize:'0.9rem'}}>TM: {matchData.tiemposLocal}</span>
                         <button onClick={()=>handleTimeoutAdjustment('local', 1)} style={{background:'#10b981', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor:'pointer'}}>+</button>
                     </div>
@@ -624,7 +617,11 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     <div style={{fontSize:'0.8rem', color:'#ccc'}}>FALTAS: {matchData.faltasVisitante}</div>
                     {matchData.faltasVisitante >= 5 && <div className="bonus-indicator">BONUS</div>}
                     <div style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'5px', marginTop:'5px'}}>
-                        <button onClick={()=>handleTimeoutAdjustment('visitante', -1)} style={{background:'#d97706', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor:'pointer'}}>-</button>
+                        <button 
+                            onClick={()=>handleTimeoutAdjustment('visitante', -1)} 
+                            disabled={matchData.tiemposVisitante <= 0} // BLOQUEO VISUAL
+                            style={{background: matchData.tiemposVisitante <= 0 ? '#555' : '#d97706', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor: matchData.tiemposVisitante <= 0 ? 'not-allowed' : 'pointer'}}
+                        >-</button>
                         <span style={{color:'white', fontWeight:'bold', fontSize:'0.9rem'}}>TM: {matchData.tiemposVisitante}</span>
                         <button onClick={()=>handleTimeoutAdjustment('visitante', 1)} style={{background:'#10b981', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor:'pointer'}}>+</button>
                     </div>
