@@ -13,6 +13,12 @@ interface Match {
     marcadorLocal?: number;
     marcadorVisitante?: number;
     jornada?: number;
+    // Agregamos los datos de suspensión a la interfaz para leerlos
+    datosSuspension?: {
+        motivo: string;
+        tiempoRestante: string;
+        cuarto: number;
+    };
 }
 
 interface ApprovedTeam {
@@ -59,15 +65,15 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
     }, []);
 
     // --- FILTRADO DE JUEGOS ---
+    // 'upcoming' incluye programados, vivos y SUSPENDIDOS
     const upcomingMatches = matches.filter(m => m.estatus !== 'finalizado');
     const finishedMatches = matches.filter(m => m.estatus === 'finalizado');
     
     finishedMatches.sort((a,b) => b.fechaAsignada.localeCompare(a.fechaAsignada));
 
-    // LOGICA DE VISIBILIDAD DEL LOBBY: Solo si no hay partidos en total
     const showLobby = matches.length === 0;
 
-    // --- NUEVA FUNCIÓN: REINICIAR TEMPORADA (SOLO BORRA DATOS, NO EQUIPOS) ---
+    // --- REINICIAR TEMPORADA ---
     const handleResetSeason = async () => {
         const confirm1 = window.confirm("⚠️ ¿ESTÁS SEGURO DE REINICIAR LA TEMPORADA?");
         if (!confirm1) return;
@@ -76,17 +82,14 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
 
         setGenerating(true);
         try {
-            // 1. Borrar Calendario
             const oldMatches = await getDocs(collection(db, 'calendario'));
             const deletePromises = oldMatches.docs.map(d => deleteDoc(d.ref));
             await Promise.all(deletePromises);
 
-            // 2. Borrar Estadísticas Individuales
             const oldStats = await getDocs(collection(db, 'stats_partido'));
             const statsPromises = oldStats.docs.map(d => deleteDoc(d.ref));
             await Promise.all(statsPromises);
 
-            // 3. Resetear Tabla de Posiciones (Equipos a 0)
             const equiposSnap = await getDocs(collection(db, 'equipos'));
             const resetPromises = equiposSnap.docs.map(d => updateDoc(d.ref, { 
                 victorias: 0, derrotas: 0, puntos: 0, 
@@ -107,7 +110,6 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
         if (!window.confirm("¿Generar calendario automático Round Robin?")) return;
         setGenerating(true);
         try {
-            // Aseguramos limpieza previa por si acaso
             await handleResetSeason(); 
 
             let equipos = approvedTeams.map(t => ({ id: t.id, nombre: t.nombreEquipo }));
@@ -166,7 +168,6 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                         <h4 style={{margin:'0 0 15px 0', color:'#d97706', fontSize:'1.1rem'}}>🛠️ Gestión del Torneo</h4>
                         
                         <div style={{display:'flex', gap:'15px', flexWrap:'wrap'}}>
-                            {/* BOTÓN GENERAR (Solo si no hay juegos) */}
                             {showLobby && (
                                 <button 
                                     onClick={handleGenerateCalendar} 
@@ -178,7 +179,6 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                                 </button>
                             )}
 
-                            {/* BOTÓN REINICIAR (Siempre visible para limpiar) */}
                             <button 
                                 onClick={handleResetSeason} 
                                 disabled={generating} 
@@ -191,7 +191,7 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                     </div>
                 )}
 
-                {/* LOBBY CONDICIONAL */}
+                {/* LOBBY */}
                 {showLobby && (
                     <div style={{marginBottom:'30px', background:'white', padding:'20px', borderRadius:'12px', boxShadow:'0 2px 10px rgba(0,0,0,0.05)', borderLeft:'5px solid #10b981'}}>
                         <h3 style={{marginTop:0, color:'#065f46', display:'flex', alignItems:'center', gap:'10px'}}>📋 Equipos Confirmados <span style={{fontSize:'0.8rem', background:'#d1fae5', padding:'2px 8px', borderRadius:'10px'}}>{approvedTeams.length}</span></h3>
@@ -201,7 +201,7 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                     </div>
                 )}
 
-                {/* PESTAÑAS DE VISTA */}
+                {/* PESTAÑAS */}
                 {!showLobby && (
                     <div style={{display:'flex', gap:'10px', marginBottom:'20px', borderBottom:'1px solid #ddd', paddingBottom:'10px'}}>
                         <button 
@@ -212,7 +212,7 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                                 cursor:'pointer', fontWeight:'bold', transition:'all 0.2s'
                             }}
                         >
-                            📅 Próximos Juegos ({upcomingMatches.length})
+                            📅 Activos / Programados ({upcomingMatches.length})
                         </button>
                         <button 
                             onClick={()=>setViewMode('finished')} 
@@ -222,7 +222,7 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                                 cursor:'pointer', fontWeight:'bold', transition:'all 0.2s'
                             }}
                         >
-                            🏁 Resultados Finales ({finishedMatches.length})
+                            🏁 Finalizados ({finishedMatches.length})
                         </button>
                     </div>
                 )}
@@ -232,37 +232,89 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                         const isEditing = editingMatchId === m.id;
                         const isLive = m.estatus === 'vivo';
                         const isFinished = m.estatus === 'finalizado';
+                        const isSuspended = m.estatus === 'suspendido'; // Nuevo estado
+
+                        // Color del borde según estado
+                        let borderColor = '#3b82f6'; // Programado (Azul)
+                        if (isLive) borderColor = '#ef4444'; // Vivo (Rojo)
+                        if (isFinished) borderColor = '#6b7280'; // Finalizado (Gris)
+                        if (isSuspended) borderColor = '#f59e0b'; // Suspendido (Naranja/Amarillo)
 
                         return (
-                            <div key={m.id} className="card" style={{display:'flex', flexDirection:'column', gap:'10px', borderLeft: isLive ? '5px solid #ef4444' : (isFinished ? '5px solid #6b7280' : '5px solid #3b82f6')}}>
+                            <div key={m.id} className="card" style={{display:'flex', flexDirection:'column', gap:'10px', borderLeft: `5px solid ${borderColor}`, position: 'relative'}}>
                                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:'10px'}}>
+                                    
+                                    {/* MODO EDICIÓN */}
                                     {isEditing ? (
                                         <div style={{display:'flex', gap:'10px', flexWrap:'wrap', background:'#eff6ff', padding:'10px', borderRadius:'8px', width:'100%'}}>
+                                            <span style={{width:'100%', fontSize:'0.8rem', color:'#666'}}>Reprogramar Partido:</span>
                                             <input type="date" value={editDate} onChange={e=>setEditDate(e.target.value)} style={{padding:'5px'}} />
                                             <input type="time" value={editTime} onChange={e=>setEditTime(e.target.value)} style={{padding:'5px'}} />
-                                            <button onClick={() => saveEditing(m.id)} className="btn btn-primary" style={{padding:'5px 10px', fontSize:'0.8rem'}}>💾</button>
+                                            <button onClick={() => saveEditing(m.id)} className="btn btn-primary" style={{padding:'5px 10px', fontSize:'0.8rem'}}>💾 Guardar</button>
                                             <button onClick={() => setEditingMatchId(null)} className="btn btn-secondary" style={{padding:'5px 10px', fontSize:'0.8rem'}}>❌</button>
                                         </div>
                                     ) : (
                                         <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
-                                            <div style={{fontSize:'0.9rem', color:'#6b7280', fontWeight:'bold'}}>📅 {m.fechaAsignada} &nbsp; ⏰ {m.hora}</div>
-                                            {rol === 'admin' && !isFinished && !isLive && <button onClick={() => {setEditingMatchId(m.id); setEditDate(m.fechaAsignada); setEditTime(m.hora);}} style={{background:'none', border:'none', cursor:'pointer', fontSize:'1rem'}}>✏️</button>}
+                                            <div style={{fontSize:'0.9rem', color:'#6b7280', fontWeight:'bold'}}>
+                                                📅 {m.fechaAsignada} &nbsp; ⏰ {m.hora}
+                                            </div>
+                                            {/* El botón de editar aparece si NO está finalizado y NO está vivo (o sea, Programado o Suspendido) */}
+                                            {rol === 'admin' && !isFinished && !isLive && (
+                                                <button 
+                                                    onClick={() => {setEditingMatchId(m.id); setEditDate(m.fechaAsignada); setEditTime(m.hora);}} 
+                                                    style={{background:'none', border:'none', cursor:'pointer', fontSize:'1rem'}}
+                                                    title="Reprogramar fecha/hora"
+                                                >
+                                                    ✏️
+                                                </button>
+                                            )}
                                             {rol === 'admin' && <button onClick={()=>handleDelete(m.id)} style={{background:'none', border:'none', cursor:'pointer', opacity:0.5}}>🗑️</button>}
                                         </div>
                                     )}
+
+                                    {/* ETIQUETAS DE ESTADO */}
                                     <div>
                                         {isLive && <span style={{background:'#ef4444', color:'white', padding:'4px 10px', borderRadius:'20px', fontSize:'0.8rem', fontWeight:'bold', animation:'pulse 1.5s infinite'}}>🔴 EN VIVO</span>}
                                         {isFinished && <span style={{background:'#374151', color:'white', padding:'4px 10px', borderRadius:'20px', fontSize:'0.8rem', fontWeight:'bold'}}>FINALIZADO</span>}
+                                        {isSuspended && <span style={{background:'#f59e0b', color:'black', padding:'4px 10px', borderRadius:'20px', fontSize:'0.8rem', fontWeight:'bold', border:'1px solid #d97706'}}>⛔ SUSPENDIDO</span>}
                                     </div>
                                 </div>
 
+                                {/* INFO SUSPENSIÓN */}
+                                {isSuspended && m.datosSuspension && (
+                                    <div style={{background:'#fff7ed', border:'1px solid #fdba74', padding:'8px', borderRadius:'6px', fontSize:'0.85rem', color:'#9a3412'}}>
+                                        <strong>Motivo:</strong> {m.datosSuspension.motivo} <br/>
+                                        <strong>Detenido en:</strong> Q{m.datosSuspension.cuarto} - {m.datosSuspension.tiempoRestante}
+                                    </div>
+                                )}
+
+                                {/* MARCADOR */}
                                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0'}}>
-                                    <div style={{textAlign:'center', flex:1}}><div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{m.equipoLocalNombre}</div>{(isLive || isFinished) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorLocal}</div>}</div>
+                                    <div style={{textAlign:'center', flex:1}}>
+                                        <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{m.equipoLocalNombre}</div>
+                                        {(isLive || isFinished || isSuspended) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorLocal}</div>}
+                                    </div>
                                     <div style={{fontWeight:'bold', color:'#9ca3af', fontSize:'1.5rem'}}>VS</div>
-                                    <div style={{textAlign:'center', flex:1}}><div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{m.equipoVisitanteNombre}</div>{(isLive || isFinished) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorVisitante}</div>}</div>
+                                    <div style={{textAlign:'center', flex:1}}>
+                                        <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{m.equipoVisitanteNombre}</div>
+                                        {(isLive || isFinished || isSuspended) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorVisitante}</div>}
+                                    </div>
                                 </div>
 
+                                {/* BOTONES DE ACCIÓN */}
                                 {isLive && <button onClick={() => onViewLive(m.id)} className="btn" style={{width:'100%', background:'#ef4444', color:'white', border:'none'}}>📺 Ver Partido en Vivo</button>}
+                                
+                                {/* BOTÓN DE REANUDAR (Si está suspendido) */}
+                                {isSuspended && (
+                                    <button 
+                                        onClick={() => onViewLive(m.id)} 
+                                        className="btn" 
+                                        style={{width:'100%', background:'#d97706', color:'white', border:'none', fontWeight:'bold'}}
+                                    >
+                                        ↪️ REANUDAR PARTIDO (Mesa Técnica)
+                                    </button>
+                                )}
+                                
                                 {isFinished && <button onClick={() => onViewDetail(m.id)} className="btn btn-secondary" style={{width:'100%'}}>📊 Ver Estadísticas Finales (Box Score)</button>}
                             </div>
                         );

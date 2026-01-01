@@ -9,7 +9,7 @@ interface Staff { entrenador: string; asistente: string; expulsado?: boolean; fa
 interface GameEvent { 
     id: string; text: string; time: string; 
     team: 'local'|'visitante'|'system'; 
-    type: 'score'|'stat'|'foul'|'sub'|'period'|'timeout'|'system'; 
+    type: 'score'|'stat'|'foul'|'sub'|'period'|'timeout'|'system'|'suspension'; // Agregado 'suspension'
     playerId?: string; action?: string; val?: number;
 }
 
@@ -30,6 +30,14 @@ interface MatchData {
     tiemposLocal: number; tiemposVisitante: number;
     gameLog?: GameEvent[];
     fechaAsignada?: string; hora?: string; cancha?: string;
+    // Datos de suspensión
+    datosSuspension?: {
+        posesion: string;
+        flecha: string;
+        tiempoRestante: string;
+        motivo: string;
+        cuarto: number;
+    };
     cuartos?: {
         q1: {local: number, visitante: number},
         q2: {local: number, visitante: number},
@@ -43,11 +51,13 @@ const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: numb
     
     const getButtonText = () => {
         if (estatus === 'programado') return "INICIAR PARTIDO";
+        if (estatus === 'suspendido') return "JUEGO SUSPENDIDO (CLICK PARA REANUDAR)"; // Texto si está suspendido
+        
         switch (periodo) {
             case 1: return "FIN DEL PRIMER CUARTO >>";
             case 2: return "FIN DEL SEGUNDO CUARTO >>";
             case 3: return "FIN DEL TERCER CUARTO >>";
-            case 4: return "IR A TIEMPO EXTRA >>"; // Corrección: Lleva a extra
+            case 4: return "IR A TIEMPO EXTRA >>"; 
             default: return `FIN DE PRÓRROGA ${periodo - 4} >>`;
         }
     };
@@ -56,16 +66,17 @@ const PeriodDisplay = memo(({ periodo, estatus, onNextQuarter }: { periodo: numb
 
     return (
         <div style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center'}}>
-            <div style={{color:'#fbbf24', fontWeight:'bold', fontSize:'1.5rem', marginBottom:'10px', textShadow:'2px 2px 4px #000'}}>
-                {getPeriodoLabel(periodo)}
+            <div style={{color: estatus==='suspendido' ? 'red' : '#fbbf24', fontWeight:'bold', fontSize:'1.5rem', marginBottom:'10px', textShadow:'2px 2px 4px #000'}}>
+                {estatus === 'suspendido' ? '⛔ SUSPENDIDO' : getPeriodoLabel(periodo)}
             </div>
             <div style={{display:'flex', gap:'5px'}}>
                 <button 
                     onClick={onNextQuarter} 
                     className="btn" 
+                    // Si está suspendido, permitimos click para reactivarlo a 'vivo'
                     style={{
-                        background: estatus === 'programado' ? '#10b981' : '#f59e0b', 
-                        color:'black', fontWeight:'bold', padding:'10px 20px', fontSize:'0.9rem', 
+                        background: estatus === 'programado' ? '#10b981' : (estatus === 'suspendido' ? '#dc2626' : '#f59e0b'), 
+                        color:'white', fontWeight:'bold', padding:'10px 20px', fontSize:'0.9rem', 
                         border:'none', borderRadius:'6px', cursor:'pointer', whiteSpace: 'nowrap'
                     }}
                 >
@@ -171,6 +182,15 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
     const [subMode, setSubMode] = useState<{team: 'local'|'visitante', playerIn: Player} | null>(null);
     const [benchModalOpen, setBenchModalOpen] = useState<'local' | 'visitante' | null>(null);
 
+    // --- ESTADO PARA SUSPENSIÓN ---
+    const [suspensionModalOpen, setSuspensionModalOpen] = useState(false);
+    const [suspensionData, setSuspensionData] = useState({
+        posesion: 'local',
+        flecha: 'local',
+        tiempoRestante: '',
+        motivo: ''
+    });
+
     const [puntosInicioCuarto, setPuntosInicioCuarto] = useState({ local: 0, visitante: 0 });
 
     // 1. CARGAR PARTIDOS
@@ -220,7 +240,8 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     staffVisitante: data.staffVisitante || {entrenador:'', asistente:''},
                     forma5: data.forma5 || {},
                     gameLog: data.gameLog || [],
-                    cuartos: data.cuartos || {}
+                    cuartos: data.cuartos || {},
+                    datosSuspension: data.datosSuspension || null // Cargar datos si existen
                 });
             }
         });
@@ -266,14 +287,12 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     const snapStats = await getDocs(qStats);
                     snapStats.forEach(d => {
                         const s = d.data();
-                        
-                        // --- REGLA FIBA ART. 36 (CARGA DE DATOS) ---
                         const isDisqualified = 
                             s.faltasTotales >= 5 || 
                             s.faltasTecnicas >= 2 || 
                             s.faltasAntideportivas >= 2 || 
                             s.faltasDescalificantes >= 1 || 
-                            (s.faltasTecnicas >= 1 && s.faltasAntideportivas >= 1); // Combo 1T+1U
+                            (s.faltasTecnicas >= 1 && s.faltasAntideportivas >= 1);
 
                         setStatsCache(prev => ({
                             ...prev,
@@ -354,13 +373,12 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             else if (action === 'falta_U') { newStats.faltasAntideportivas++; logText = `🛑 U: ${player.nombre}`; }
             else if (action === 'falta_D') { newStats.faltasDescalificantes++; logText = `⛔ D: ${player.nombre}`; }
             
-            // --- REGLA FIBA ART. 36 (TIEMPO REAL) ---
             if (
                 newStats.faltasTotales >= 5 || 
                 newStats.faltasTecnicas >= 2 || 
                 newStats.faltasAntideportivas >= 2 || 
                 newStats.faltasDescalificantes >= 1 ||
-                (newStats.faltasTecnicas >= 1 && newStats.faltasAntideportivas >= 1)
+                (newStats.faltasTecnicas >= 1 && newStats.faltasAntideportivas >= 1) 
             ) { 
                 logText += " (EXPULSADO)"; 
                 newStats.expulsado = true; 
@@ -404,10 +422,17 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         setSubMode(null);
     };
 
-    // --- MANEJO DE CUARTOS (CORREGIDO) ---
     const handleNextQuarter = async () => {
         if (!matchData) return;
         
+        // Si está suspendido, permitimos reanudar
+        if (matchData.estatus === 'suspendido') {
+            if(!window.confirm("¿REANUDAR EL PARTIDO AHORA?")) return;
+            await updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo' });
+            addLog("▶️ JUEGO REANUDADO", 'system', 'system');
+            return;
+        }
+
         if (matchData.estatus === 'programado') { 
             await updateDoc(doc(db, 'calendario', matchData.id), { estatus: 'vivo', cuarto: 1 });
             setPuntosInicioCuarto({ local: 0, visitante: 0 });
@@ -451,21 +476,19 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         addLog(logMsg, 'period', 'system');
     };
 
-    // --- TIEMPOS FUERA (CORREGIDO: NO -1) ---
     const handleTimeoutAdjustment = async (team: 'local'|'visitante', change: number) => {
         if (!matchData) return;
 
         const current = team === 'local' ? (matchData.tiemposLocal ?? 0) : (matchData.tiemposVisitante ?? 0);
         const newValue = current + change;
 
-        // Lógica de Máximos FIBA
         const q = matchData.cuarto || 1;
         let maxTimeouts = 0;
-        if (q <= 2) maxTimeouts = 2; // 1ra Mitad
-        else if (q <= 4) maxTimeouts = 3; // 2da Mitad
-        else maxTimeouts = 1; // Prórrogas
+        if (q <= 2) maxTimeouts = 2; 
+        else if (q <= 4) maxTimeouts = 3; 
+        else maxTimeouts = 1; 
 
-        if (newValue < 0) return; // PROHIBIDO BAJAR DE 0
+        if (newValue < 0) return; 
         if (newValue > maxTimeouts) {
             alert(`⚠️ El límite de tiempos fuera para este periodo es ${maxTimeouts}.`);
             return;
@@ -490,7 +513,29 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         await updateDoc(doc(db, 'calendario', matchData.id), updates);
     };
 
-    // --- FINALIZAR PARTIDO (CORREGIDO: PUNTOS TABLA) ---
+    // --- NUEVA FUNCIÓN: SUSPENDER JUEGO ---
+    const handleSuspendGame = async () => {
+        if (!matchData || !suspensionData.motivo || !suspensionData.tiempoRestante) {
+            alert("Por favor completa el tiempo y el motivo.");
+            return;
+        }
+        if (!window.confirm("¿Seguro que deseas SUSPENDER el partido? Quedará guardado para después.")) return;
+
+        const suspPayload = {
+            ...suspensionData,
+            cuarto: matchData.cuarto
+        };
+
+        await updateDoc(doc(db, 'calendario', matchData.id), { 
+            estatus: 'suspendido',
+            datosSuspension: suspPayload
+        });
+
+        await addLog(`⛔ JUEGO SUSPENDIDO: ${suspensionData.motivo} (Q${matchData.cuarto} - ${suspensionData.tiempoRestante})`, 'suspension', 'system');
+        setSuspensionModalOpen(false);
+        onClose(); // Salir de la mesa
+    };
+
     const handleFinalize = async () => {
         if (!matchData || !window.confirm("¿FINALIZAR PARTIDO DEFINITIVAMENTE?")) return;
         
@@ -498,16 +543,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         const puntosHechosVisitante = matchData.marcadorVisitante - puntosInicioCuarto.visitante;
         const qKey = `q${matchData.cuarto}`;
 
-        // 1. Determinar ganador
         const localWins = matchData.marcadorLocal > matchData.marcadorVisitante;
         const winnerId = localWins ? matchData.equipoLocalId : matchData.equipoVisitanteId;
         const loserId = localWins ? matchData.equipoVisitanteId : matchData.equipoLocalId;
 
-        // 2. Definir puntos EXACTOS
         const winnerScore = localWins ? matchData.marcadorLocal : matchData.marcadorVisitante;
         const loserScore = localWins ? matchData.marcadorVisitante : matchData.marcadorLocal;
         
-        // 3. Actualizar Ganador (Recibe sus puntos a favor y los del perdedor en contra)
         await updateDoc(doc(db, 'equipos', winnerId), { 
             victorias: increment(1), 
             puntos: increment(2), 
@@ -515,7 +557,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             puntos_contra: increment(loserScore) 
         });
 
-        // 4. Actualizar Perdedor (Recibe sus puntos a favor y los del ganador en contra)
         await updateDoc(doc(db, 'equipos', loserId), { 
             derrotas: increment(1), 
             puntos: increment(1), 
@@ -539,7 +580,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
         const cleanCache = { ...statsCache }; Object.keys(cleanCache).forEach(key => cleanCache[key] = { puntos:0, faltasPersonales:0, faltasTecnicas:0, faltasAntideportivas:0, faltasDescalificantes:0, faltasTotales:0, expulsado:false });
         setStatsCache(cleanCache);
         setLocalOnCourt([]); setLocalBench([]); setVisitanteOnCourt([]); setVisitanteBench([]);
-        await updateDoc(doc(db, 'calendario', matchData.id), { marcadorLocal: 0, marcadorVisitante: 0, faltasLocal: 0, faltasVisitante: 0, tiemposLocal: 2, tiemposVisitante: 2, cuarto: 1, gameLog: [], estatus: 'programado', staffLocal: null, staffVisitante: null, cuartos: null });
+        await updateDoc(doc(db, 'calendario', matchData.id), { marcadorLocal: 0, marcadorVisitante: 0, faltasLocal: 0, faltasVisitante: 0, tiemposLocal: 2, tiemposVisitante: 2, cuarto: 1, gameLog: [], estatus: 'programado', staffLocal: null, staffVisitante: null, cuartos: null, datosSuspension: null });
         setPuntosInicioCuarto({local:0, visitante:0});
         alert("Reiniciado.");
     };
@@ -566,8 +607,12 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     const forma5Visitante = m.forma5?.[m.equipoVisitanteId]?.jugadores?.length >= 5;
                     const isReady = forma5Local && forma5Visitante;
                     const isLive = m.estatus === 'vivo';
+                    // Mostrar también los suspendidos
+                    const isSuspended = m.estatus === 'suspendido';
+                    const active = isLive || isSuspended;
+
                     return (
-                        <div key={m.id} className="card" style={{padding:'15px', borderLeft: isLive ? '5px solid red' : (isReady ? '5px solid #10b981' : '5px solid #f59e0b')}}>
+                        <div key={m.id} className="card" style={{padding:'15px', borderLeft: active ? '5px solid red' : (isReady ? '5px solid #10b981' : '5px solid #f59e0b')}}>
                             <div style={{display:'flex', justifyContent:'space-between', marginBottom:'10px'}}>
                                 <div style={{fontWeight:'bold', color:'#333'}}>{m.equipoLocalNombre} vs {m.equipoVisitanteNombre}</div>
                                 <div style={{fontSize:'0.9rem', color:'#666'}}>{viewAll && <span style={{marginRight:'10px'}}>📅 {m.fechaAsignada}</span>}⏰ {m.hora} | 📍 {m.cancha}</div>
@@ -576,7 +621,18 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                                 <div>{m.equipoLocalNombre}: {forma5Local ? <span style={{color:'green', fontWeight:'bold'}}>✅ LISTO</span> : <span style={{color:'red', fontWeight:'bold'}}>❌ FALTAN</span>}</div>
                                 <div>{m.equipoVisitanteNombre}: {forma5Visitante ? <span style={{color:'green', fontWeight:'bold'}}>✅ LISTO</span> : <span style={{color:'red', fontWeight:'bold'}}>❌ FALTAN</span>}</div>
                             </div>
-                            {m.estatus === 'finalizado' ? ( <button disabled className="btn btn-secondary" style={{width:'100%'}}>PARTIDO FINALIZADO</button> ) : ( <button onClick={() => setSelectedMatchId(m.id)} disabled={!isReady && !isLive} className="btn" style={{width:'100%', background: isLive ? '#dc2626' : (isReady ? '#1f2937' : '#e5e7eb'), color: isReady || isLive ? 'white' : '#9ca3af', cursor: isReady || isLive ? 'pointer' : 'not-allowed'}}>{isLive ? '🔴 CONTINUAR JUEGO' : (isReady ? '🏀 GESTIONAR PARTIDO' : '⏳ ESPERANDO ALINEACIONES')}</button> )}
+                            {m.estatus === 'finalizado' ? ( 
+                                <button disabled className="btn btn-secondary" style={{width:'100%'}}>PARTIDO FINALIZADO</button> 
+                            ) : ( 
+                                <button 
+                                    onClick={() => setSelectedMatchId(m.id)} 
+                                    disabled={!isReady && !active} 
+                                    className="btn" 
+                                    style={{width:'100%', background: active ? '#dc2626' : (isReady ? '#1f2937' : '#e5e7eb'), color: isReady || active ? 'white' : '#9ca3af', cursor: isReady || active ? 'pointer' : 'not-allowed'}}
+                                >
+                                    {isSuspended ? '⛔ JUEGO SUSPENDIDO (REANUDAR)' : (isLive ? '🔴 CONTINUAR JUEGO' : (isReady ? '🏀 GESTIONAR PARTIDO' : '⏳ ESPERANDO ALINEACIONES'))}
+                                </button> 
+                            )}
                         </div>
                     );
                 })}
@@ -587,7 +643,6 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
 
     if (!matchData) return <div style={{padding:'50px', color:'white'}}>Cargando...</div>;
 
-    // --- RENDERIZADO PRINCIPAL CON BOTONES CORREGIDOS ---
     return (
         <div style={{background:'#121212', height:'100vh', color:'white', display:'flex', flexDirection:'column', overflow:'hidden'}}>
             <style>{`.btn-stat { flex:1; padding:6px 0; font-size:0.75rem; font-weight:bold; border:none; border-radius:3px; cursor:pointer; background:#2563eb; color:white; transition: opacity 0.1s; }.btn-stat:active { transform:scale(0.95); opacity:0.8; }.clock-btn { background:#333; color:white; border:1px solid #555; padding:4px 8px; cursor:pointer; font-size:0.75rem; border-radius:3px; font-weight:bold; backdrop-filter: blur(4px); background: rgba(50,50,50,0.8); }.bonus-indicator { font-size: 0.8rem; background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-top: 5px; animation: pulse 2s infinite; display:inline-block; box-shadow: 0 0 10px #ef4444; }.timeout-btn { background: #d97706; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; cursor: pointer; margin-top: 5px; display: block; width: 100%; transition: background 0.2s; }.timeout-btn:disabled { background: #555; color: #999; cursor: not-allowed; }`}</style>
@@ -601,7 +656,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     <div style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'5px', marginTop:'5px'}}>
                         <button 
                             onClick={()=>handleTimeoutAdjustment('local', -1)} 
-                            disabled={matchData.tiemposLocal <= 0} // BLOQUEO VISUAL
+                            disabled={matchData.tiemposLocal <= 0} 
                             style={{background: matchData.tiemposLocal <= 0 ? '#555' : '#d97706', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor: matchData.tiemposLocal <= 0 ? 'not-allowed' : 'pointer'}}
                         >-</button>
                         <span style={{color:'white', fontWeight:'bold', fontSize:'0.9rem'}}>TM: {matchData.tiemposLocal}</span>
@@ -619,7 +674,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     <div style={{display:'flex', alignItems:'center', justifyContent:'center', gap:'5px', marginTop:'5px'}}>
                         <button 
                             onClick={()=>handleTimeoutAdjustment('visitante', -1)} 
-                            disabled={matchData.tiemposVisitante <= 0} // BLOQUEO VISUAL
+                            disabled={matchData.tiemposVisitante <= 0} 
                             style={{background: matchData.tiemposVisitante <= 0 ? '#555' : '#d97706', color:'white', border:'none', borderRadius:'3px', width:'30px', fontWeight:'bold', cursor: matchData.tiemposVisitante <= 0 ? 'not-allowed' : 'pointer'}}
                         >-</button>
                         <span style={{color:'white', fontWeight:'bold', fontSize:'0.9rem'}}>TM: {matchData.tiemposVisitante}</span>
@@ -662,6 +717,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
             
             <div style={{padding:'6px', background:'#111', borderTop:'1px solid #333', textAlign:'center', flexShrink:0, display:'flex', justifyContent:'center', gap:'10px'}}>
                 <button onClick={onClose} className="btn btn-secondary" style={{fontSize:'0.8rem'}}>SALIR</button>
+                <button onClick={() => setSuspensionModalOpen(true)} className="btn" style={{background:'#d97706', color:'white', fontSize:'0.8rem'}}>PAUSAR</button>
                 <button onClick={handleResetGame} className="btn" style={{background:'#7f1d1d', color:'white', fontSize:'0.8rem'}}>REINICIAR</button>
                 <button onClick={handleFinalize} className="btn" style={{background:'#10b981', color:'white', fontSize:'0.8rem'}}>FINALIZAR</button>
             </div>
@@ -672,7 +728,7 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                         <div style={{padding:'10px', background: benchModalOpen==='local'?'#1e3a8a':'#78350f', color:'white', fontWeight:'bold', textAlign:'center'}}>SELECCIONA ENTRANTE ({benchModalOpen.toUpperCase()})</div>
                         <div style={{padding:'10px', maxHeight:'60vh', overflowY:'auto', display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px'}}>
                             {(benchModalOpen==='local' ? localBench : visitanteBench).map(p => {
-                                // --- CORRECCIÓN FINAL: BLOQUEAR EXPULSADOS EN EL BANCO ---
+                                // BLOQUEO DE JUGADORES EXPULSADOS EN EL MODAL DE CAMBIO
                                 const isExpelled = statsCache[p.id]?.expulsado === true;
                                 return (
                                     <button 
@@ -681,14 +737,13 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                                         onClick={() => { if(!isExpelled) { setSubMode({team: benchModalOpen!, playerIn: p}); setBenchModalOpen(null); } }} 
                                         style={{
                                             padding:'10px', 
-                                            background: isExpelled ? '#450a0a' : '#333', // Rojo oscuro
+                                            background: isExpelled ? '#450a0a' : '#333', 
                                             border: isExpelled ? '1px solid red' : '1px solid #555', 
                                             color: isExpelled ? '#ef4444' : 'white', 
                                             borderRadius:'6px', 
                                             textAlign:'left',
-                                            cursor: isExpelled ? 'not-allowed' : 'pointer', // Cursor prohibido
-                                            opacity: isExpelled ? 0.6 : 1,
-                                            pointerEvents: isExpelled ? 'none' : 'auto' // Bloqueo físico
+                                            cursor: isExpelled ? 'not-allowed' : 'pointer',
+                                            opacity: isExpelled ? 0.6 : 1
                                         }}
                                     >
                                         <div style={{fontWeight:'bold', fontSize:'0.9rem'}}>
@@ -703,6 +758,47 @@ const MesaTecnica: React.FC<{ onClose: () => void, onMatchFinalized: () => void 
                     </div>
                 </div>
             )}
+
+            {suspensionModalOpen && (
+                <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.9)', zIndex:200, display:'flex', justifyContent:'center', alignItems:'center'}}>
+                    <div style={{background:'#1f2937', padding:'20px', borderRadius:'8px', width:'90%', maxWidth:'400px', border:'1px solid #4b5563'}}>
+                        <h3 style={{color:'#f59e0b', textAlign:'center', marginBottom:'15px'}}>⛔ SUSPENDER PARTIDO</h3>
+                        
+                        <label style={{display:'block', marginBottom:'10px', fontSize:'0.9rem'}}>
+                            Posesión del Balón:
+                            <select value={suspensionData.posesion} onChange={e => setSuspensionData({...suspensionData, posesion: e.target.value})} style={{width:'100%', padding:'5px', marginTop:'5px', background:'#374151', color:'white', border:'1px solid #6b7280'}}>
+                                <option value="local">{matchData.equipoLocalNombre}</option>
+                                <option value="visitante">{matchData.equipoVisitanteNombre}</option>
+                                <option value="neutral">Balón al Aire / Nadie</option>
+                            </select>
+                        </label>
+
+                        <label style={{display:'block', marginBottom:'10px', fontSize:'0.9rem'}}>
+                            Flecha de Alternabilidad:
+                            <select value={suspensionData.flecha} onChange={e => setSuspensionData({...suspensionData, flecha: e.target.value})} style={{width:'100%', padding:'5px', marginTop:'5px', background:'#374151', color:'white', border:'1px solid #6b7280'}}>
+                                <option value="local">{matchData.equipoLocalNombre}</option>
+                                <option value="visitante">{matchData.equipoVisitanteNombre}</option>
+                            </select>
+                        </label>
+
+                        <label style={{display:'block', marginBottom:'10px', fontSize:'0.9rem'}}>
+                            Tiempo Restante (Q{matchData.cuarto}):
+                            <input type="text" placeholder="Ej: 04:35" value={suspensionData.tiempoRestante} onChange={e => setSuspensionData({...suspensionData, tiempoRestante: e.target.value})} style={{width:'100%', padding:'5px', marginTop:'5px', background:'#374151', color:'white', border:'1px solid #6b7280'}} />
+                        </label>
+
+                        <label style={{display:'block', marginBottom:'15px', fontSize:'0.9rem'}}>
+                            Motivo de Suspensión:
+                            <textarea placeholder="Ej: Lluvia intensa, Falla eléctrica..." value={suspensionData.motivo} onChange={e => setSuspensionData({...suspensionData, motivo: e.target.value})} style={{width:'100%', padding:'5px', marginTop:'5px', background:'#374151', color:'white', border:'1px solid #6b7280', height:'60px'}} />
+                        </label>
+
+                        <div style={{display:'flex', gap:'10px', justifyContent:'center'}}>
+                            <button onClick={() => setSuspensionModalOpen(false)} className="btn btn-secondary">CANCELAR</button>
+                            <button onClick={handleSuspendGame} className="btn" style={{background:'#dc2626', color:'white'}}>CONFIRMAR SUSPENSIÓN</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {subMode && <div style={{position:'fixed', bottom:'50px', left:'10px', right:'10px', background:'#dc2626', color:'white', padding:'10px', borderRadius:'8px', boxShadow:'0 5px 20px rgba(0,0,0,0.5)', zIndex:90, textAlign:'center', animation:'pulse 1.5s infinite'}}><div style={{fontSize:'0.9rem'}}>🔄 <strong>{subMode.playerIn.nombre}</strong> ENTRA.</div><div style={{fontSize:'0.8rem'}}>Haz click en quien SALE.</div><button onClick={()=>setSubMode(null)} style={{marginTop:'5px', background:'white', color:'red', border:'none', padding:'3px 10px', borderRadius:'4px', cursor:'pointer', fontWeight:'bold', fontSize:'0.8rem'}}>CANCELAR</button></div>}
         </div>
     );
