@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { db, storage } from './firebase'; // Asegúrate de que storage esté exportado en firebase.ts
-// CLAVE: Importamos lo necesario para subir la foto
-import { collection, getDocs, query, where, updateDoc, collectionGroup } from 'firebase/firestore'; 
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db } from './firebase';
+// CLAVE: SOLO se importan los valores/métodos necesarios
+import { collection, getDocs, query, where } from 'firebase/firestore'; 
+// CLAVE: El tipo DocumentData se importa por separado
 import type { DocumentData } from 'firebase/firestore'; 
-import PlayoffBracket from './PlayoffBracket';
+import PlayoffBracket from './PlayoffBracket'; // 1. IMPORTAR COMPONENTE
 
 interface Forma21 extends DocumentData {
     id: string;
@@ -25,14 +25,14 @@ interface Partido extends DocumentData {
 }
 
 interface JugadorDashboardProps {
-    userCedula: string | null; // Cambiado para usar la cédula vinculada
+    userEquipoId: string | null;
     userName: string | null;
     formas21: Forma21[];
     setViewRosterId: (id: string | null) => void;
 }
 
 const JugadorDashboard: React.FC<JugadorDashboardProps> = ({ 
-    userCedula, 
+    userEquipoId, 
     userName, 
     formas21,
     setViewRosterId
@@ -40,180 +40,140 @@ const JugadorDashboard: React.FC<JugadorDashboardProps> = ({
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [misPartidos, setMisPartidos] = useState<Partido[]>([]);
-    const [showBracket, setShowBracket] = useState(false);
-    const [uploading, setUploading] = useState(false);
+    const [showBracket, setShowBracket] = useState(false); // 2. ESTADO PARA PLAYOFFS
     
-    // Encontrar el equipo al que pertenece el jugador por las Formas 21 cargadas
-    const miForma = formas21.find(f => f.id === formas21.find(form => form.nombreEquipo)?.id); 
+    // 9B: Encontrar la Forma 21 del jugador
+    const miForma = formas21.find(f => f.id === userEquipoId);
 
     useEffect(() => {
+        if (!userEquipoId) {
+            setLoading(false);
+            return;
+        }
+
+        // 9C: Cargar solo los partidos jugados donde participa mi equipo
         const fetchPartidos = async () => {
-            // Buscamos si el jugador está en algún equipo para obtener su ID de equipo real
-            if (!userCedula) {
-                setLoading(false);
-                return;
-            }
-
+            setLoading(true);
             try {
-                // Buscamos en todas las subcolecciones de jugadores quién tiene esta cédula
-                const qJugador = query(collectionGroup(db, 'jugadores'), where('cedula', '==', userCedula));
-                const snapJugador = await getDocs(qJugador);
+                // No hay query OR en Firestore, así que debemos hacer dos consultas
+                
+                // Partidos donde mi equipo fue Local
+                const localQuery = query(collection(db, 'partidos'), where('equipoLocalId', '==', userEquipoId));
+                const localSnapshot = await getDocs(localQuery);
 
-                if (!snapJugador.empty) {
-                    const equipoIdReal = snapJugador.docs[0].ref.parent.parent?.id;
-                    
-                    if (equipoIdReal) {
-                        // Partidos donde mi equipo fue Local
-                        const localQuery = query(collection(db, 'calendario'), where('equipoLocalId', '==', equipoIdReal), where('estatus', '==', 'finalizado'));
-                        const localSnapshot = await getDocs(localQuery);
+                // Partidos donde mi equipo fue Visitante
+                const visitanteQuery = query(collection(db, 'partidos'), where('equipoVisitanteId', '==', userEquipoId));
+                const visitanteSnapshot = await getDocs(visitanteQuery);
+                
+                const partidosLocal: Partido[] = localSnapshot.docs.map(doc => doc.data() as Partido);
+                const partidosVisitante: Partido[] = visitanteSnapshot.docs.map(doc => doc.data() as Partido);
+                
+                // Combinar y ordenar (del más reciente al más antiguo)
+                const todosMisPartidos = [...partidosLocal, ...partidosVisitante]
+                    .sort((a, b) => b.jornada - a.jornada);
 
-                        // Partidos donde mi equipo fue Visitante
-                        const visitanteQuery = query(collection(db, 'calendario'), where('equipoVisitanteId', '==', equipoIdReal), where('estatus', '==', 'finalizado'));
-                        const visitanteSnapshot = await getDocs(visitanteQuery);
-                        
-                        const partidosLocal = localSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Partido));
-                        const partidosVisitante = visitanteSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Partido));
-                        
-                        const todosMisPartidos = [...partidosLocal, ...partidosVisitante]
-                            .sort((a, b) => (b.jornada || 0) - (a.jornada || 0));
+                setMisPartidos(todosMisPartidos);
 
-                        setMisPartidos(todosMisPartidos);
-                    }
-                }
             } catch (err) {
+                setError("Error al cargar los partidos de tu equipo. Revisa las reglas de seguridad.");
                 console.error(err);
-                setError("Error al cargar datos.");
             } finally {
                 setLoading(false);
             }
         };
 
         fetchPartidos();
-    }, [userCedula]);
+    }, [userEquipoId]);
 
-    // --- FUNCIÓN PARA QUE EL JUGADOR SUBA SU PROPIA FOTO ---
-    const handleUploadFoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!e.target.files || !e.target.files[0] || !userCedula) return;
-        
-        const file = e.target.files[0];
-        setUploading(true);
-
-        try {
-            // 1. Subir a Storage
-            const storageRef = ref(storage, `jugadores_fotos/${userCedula}.jpg`);
-            await uploadBytes(storageRef, file);
-            const url = await getDownloadURL(storageRef);
-
-            // 2. Actualizar su ficha en la Forma 21 (Buscando por cédula)
-            const q = query(collectionGroup(db, 'jugadores'), where('cedula', '==', userCedula));
-            const snap = await getDocs(q);
-            
-            const promises = snap.docs.map(d => updateDoc(d.ref, { fotoUrl: url }));
-            await Promise.all(promises);
-
-            alert("✅ ¡Tu foto ha sido actualizada! Ya aparece en tu barajita de equipo.");
-        } catch (error) {
-            console.error(error);
-            alert("Error al subir la foto.");
-        } finally {
-            setUploading(false);
-        }
-    };
-
-    if (loading) return <p style={{textAlign: 'center', color: 'white'}}>Cargando panel de jugador...</p>;
+    if (!userEquipoId) return <p style={{textAlign: 'center', padding: '20px'}}>No estás asignado a ningún equipo. Contacta al Administrador.</p>;
+    if (loading) return <p style={{textAlign: 'center'}}>Cargando información de tu equipo...</p>;
+    if (error) return <p style={{color: 'red', textAlign: 'center'}}>{error}</p>;
 
     return (
-        <div style={{ maxWidth: '800px', margin: '0 auto', textAlign: 'left', color: 'white' }}>
+        <div style={{ maxWidth: '800px', margin: '0 auto', textAlign: 'left' }}>
             
+            {/* 3. MODAL DE PLAYOFFS */}
             {showBracket && <PlayoffBracket adminMode={false} onClose={() => setShowBracket(false)} />}
 
-            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom: '2px solid #fbbf24', paddingBottom: '10px', marginBottom:'20px'}}>
-                <h3 style={{margin:0}}>⭐ Panel de Jugador: {userName}</h3>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom: '2px solid #007bff', paddingBottom: '10px', marginBottom:'20px'}}>
+                <h3 style={{margin:0}}>
+                    ⭐ Mi Equipo: {miForma?.nombreEquipo || 'Cargando...'}
+                </h3>
+                {/* 4. BOTÓN PARA ABRIR PLAYOFFS */}
                 <button 
                     onClick={() => setShowBracket(true)}
                     className="btn"
                     style={{
-                        background: 'linear-gradient(45deg, #f59e0b, #d97706)',
+                        background: 'linear-gradient(45deg, #7c3aed, #6d28d9)',
                         color: 'white', border: 'none', borderRadius: '5px',
-                        padding: '8px 15px', fontWeight: 'bold', cursor: 'pointer', fontSize:'0.8rem'
+                        padding: '8px 15px', fontWeight: 'bold', cursor: 'pointer', fontSize:'0.9rem',
+                        display:'flex', alignItems:'center', gap:'5px'
                     }}
                 >
-                    🏆 Playoffs
+                    🏆 Ver Playoffs
                 </button>
             </div>
 
-            {/* SECCIÓN DE AUTOCARGA DE FOTO */}
-            <div className="card" style={{ marginBottom: '30px', background: 'rgba(255,255,255,0.1)', padding: '20px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.2)', textAlign: 'center' }}>
-                <h4 style={{margin: '0 0 10px 0', color: '#fbbf24'}}>📸 Gestionar mi Foto</h4>
-                <p style={{fontSize: '0.85rem', opacity: 0.8}}>Sube tu foto para que aparezca en tu barajita oficial de la liga.</p>
-                
-                <input 
-                    type="file" 
-                    accept="image/*" 
-                    id="foto-input" 
-                    style={{display: 'none'}} 
-                    onChange={handleUploadFoto} 
-                />
-                <label 
-                    htmlFor="foto-input" 
-                    className="btn" 
-                    style={{ 
-                        display: 'inline-block', background: '#3b82f6', color: 'white', 
-                        padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', marginTop: '10px'
-                    }}
-                >
-                    {uploading ? '⌛ Subiendo...' : '🤳 Tomar o Subir Foto'}
-                </label>
-            </div>
-
             {/* Roster del Equipo */}
-            <div className="data-block-container" style={{ marginBottom: '30px', background: 'white', padding: '15px', borderRadius: '10px', color: '#333' }}>
-                <div style={{fontWeight: 'bold', borderBottom: '1px solid #eee', marginBottom: '10px', paddingBottom: '5px'}}>Información de Plantilla</div>
-                <p style={{fontSize: '0.9rem'}}>Cédula vinculada: <strong>{userCedula}</strong></p>
+            <div className="data-block-container" style={{ marginBottom: '30px' }}>
+                <div className="data-block-header">Roster y Jugadores</div>
+                <p>Eres el jugador: <strong>{userName}</strong></p>
                 
                 {miForma && (
                     <button 
                         onClick={() => setViewRosterId(miForma.id)} 
                         className="btn btn-secondary" 
-                        style={{ fontSize: '12px', padding: '8px 15px', width: '100%' }}
+                        style={{ fontSize: '12px', padding: '8px 15px' }}
                     >
-                        Ver Lista de Compañeros
+                        Ver Roster Completo ({miForma.rosterCompleto ? 'Completo' : 'Pendiente'})
                     </button>
                 )}
             </div>
 
             {/* Historial de Partidos Jugados */}
-            <div className="data-block-container" style={{ background: 'white', padding: '15px', borderRadius: '10px', color: '#333' }}>
-                <div style={{fontWeight: 'bold', borderBottom: '1px solid #eee', marginBottom: '10px', paddingBottom: '5px'}}>Últimos Resultados de mi Equipo</div>
+            <div className="data-block-container">
+                <div className="data-block-header">Últimos Resultados</div>
                 {misPartidos.length === 0 ? (
-                    <p style={{fontSize: '0.85rem', color: '#666'}}>Aún no hay partidos finalizados registrados.</p>
+                    <p>Tu equipo aún no ha jugado partidos oficiales.</p>
                 ) : (
-                    <table style={{width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse'}}>
+                    <table className="data-table">
                         <thead>
-                            <tr style={{textAlign: 'left', color: '#888'}}>
-                                <th style={{padding: '8px'}}>Rival</th>
-                                <th>Score</th>
+                            <tr>
+                                <th>Jornada</th>
+                                <th>Oponente</th>
                                 <th>Resultado</th>
+                                <th>Estado</th>
                             </tr>
                         </thead>
                         <tbody>
                             {misPartidos.map(p => {
-                                const esLocal = p.equipoLocalId === (formas21.find(f => f.nombreEquipo)?.id); // Simplificado
+                                const esLocal = p.equipoLocalId === userEquipoId;
                                 const miMarcador = esLocal ? p.marcadorLocal : p.marcadorVisitante;
                                 const opMarcador = esLocal ? p.marcadorVisitante : p.marcadorLocal;
                                 const oponenteNombre = esLocal ? p.equipoVisitanteNombre : p.equipoLocalNombre;
                                 
-                                const gano = miMarcador > opMarcador;
+                                let resultadoTexto = 'EMPATE';
+                                let color = 'gray';
+                                
+                                if (miMarcador > opMarcador) {
+                                    resultadoTexto = 'VICTORIA';
+                                    color = '#10b981'; // Verde
+                                } else if (miMarcador < opMarcador) {
+                                    resultadoTexto = 'DERROTA';
+                                    color = '#ef4444'; // Rojo
+                                }
 
                                 return (
-                                    <tr key={p.id} style={{borderTop: '1px solid #f3f4f6'}}>
-                                        <td style={{padding: '10px 8px'}}>{oponenteNombre}</td>
+                                    <tr key={p.id}>
+                                        <td>{p.jornada}</td>
+                                        <td>vs {oponenteNombre}</td>
                                         <td style={{fontWeight:'bold'}}>{miMarcador} - {opMarcador}</td>
                                         <td>
                                             <span style={{ 
-                                                color: gano ? '#10b981' : '#ef4444', fontWeight: 'bold'
+                                                backgroundColor: color, color: 'white', 
+                                                padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold'
                                             }}>
-                                                {gano ? 'GANADO' : 'PERDIDO'}
+                                                {resultadoTexto}
                                             </span>
                                         </td>
                                     </tr>

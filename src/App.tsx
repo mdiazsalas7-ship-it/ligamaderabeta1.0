@@ -28,9 +28,7 @@ import NewsFeed from './NewsFeed';
 import AdminEquipos from './AdminEquipos';
 import PlayoffBracket from './PlayoffBracket'; 
 import InstallButton from './InstallButton';
-import TeamsPublicViewer from './TeamsPublicViewer'; 
 
-// Interfaces
 interface Equipo { 
     id: string; 
     nombre: string; 
@@ -48,7 +46,6 @@ interface UsuarioData extends DocumentData {
     rol: 'admin' | 'delegado' | 'pendiente' | 'jugador' | 'fan'; 
     equipoId?: string;
     nombre?: string;
-    cedula?: string;
 }
 
 interface Forma21 extends DocumentData { 
@@ -68,10 +65,9 @@ function App() {
   const [equipos, setEquipos] = useState<Equipo[]>([]);
   const [formas21, setFormas21] = useState<Forma21[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  
   const [liveMatches, setLiveMatches] = useState<any[]>([]);
 
-  // Vistas
+  // Vistas y Navegación
   const [viewRosterId, setViewRosterId] = useState<string | null>(null); 
   const [matchView, setMatchView] = useState(false); 
   const [adminFormView, setAdminFormView] = useState(false); 
@@ -89,49 +85,35 @@ function App() {
   const [newsFeedView, setNewsFeedView] = useState(false);
   const [adminEquiposView, setAdminEquiposView] = useState(false);
   const [showBracket, setShowBracket] = useState(false); 
-  const [teamsView, setTeamsView] = useState(false); 
-  
   const [dataRefreshKey, setDataRefreshKey] = useState(0); 
-  
   const initialLoadDone = useRef(false);
 
   const refreshData = () => { setDataRefreshKey(prev => prev + 1); closeAllViews(); };
 
   const closeAllViews = () => {
     setViewRosterId(null); setMatchView(false); setAdminFormView(false); setUsersView(false); setRegistroView(false);
-    setSelectedFormId(null); setCalendarView(false); setMesaTecnicaView(false); setStatsView(false); setStandingsView(false); setSelectForma5MatchId(null);
-    setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false);
-    setTeamsView(false);
+    setSelectedFormId(null); setCalendarView(false); setMesaTecnicaView(false); setStatsView(false); setStandingsView(false); 
+    setSelectForma5MatchId(null); setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); 
+    setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false);
   };
 
   const sendNotification = (title: string, body: string, icon = 'https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg') => {
       if ('Notification' in window && Notification.permission === 'granted') {
-          try {
-            new Notification(title, { body, icon, tag: 'madera15_alert' });
-          } catch (e) {
-              console.log("Error push:", e);
-          }
+          try { new Notification(title, { body, icon, tag: 'madera15_alert' }); } catch (e) { console.log("Error push:", e); }
       }
   };
   
-  // 1. OBTENER TOKEN (Cédula Digital)
+  // 1. OBTENER TOKEN FCM
   useEffect(() => {
     const getTokenFCM = async () => {
       if (!user || !messaging) return;
       try {
         const permission = await Notification.requestPermission();
         if (permission === 'granted') {
-          const token = await getToken(messaging, {
-            vapidKey: "BCIo9OadymsSrPl7ByiJ-MFXyunwbesFbKOw8ZTOaVRQInFVbTzQgfHSZaJx05vfdUZZZsv9XLdCKxtdvg3LNkg" 
-          });
-          if (token) {
-            console.log("Token FCM:", token);
-            await updateDoc(doc(db, 'usuarios', user.uid), { fcmToken: token });
-          }
+          const token = await getToken(messaging, { vapidKey: "BCIo9OadymsSrPl7ByiJ-MFXyunwbesFbKOw8ZTOaVRQInFVbTzQgfHSZaJx05vfdUZZZsv9XLdCKxtdvg3LNkg" });
+          if (token) await updateDoc(doc(db, 'usuarios', user.uid), { fcmToken: token });
         }
-      } catch (error) {
-        console.log("Error Token:", error);
-      }
+      } catch (error) { console.log("Error Token:", error); }
     };
     if (user) getTokenFCM();
   }, [user]); 
@@ -140,115 +122,69 @@ function App() {
   useEffect(() => {
     if (!user || !messaging) return;
     const unsubscribe = onMessage(messaging, (payload) => {
-        console.log('Mensaje FCM recibido:', payload);
         const titulo = payload.notification?.title || "¡Nueva Notificación!";
         const cuerpo = payload.notification?.body || "Revisa la app para más detalles.";
         sendNotification(titulo, cuerpo);
     });
-    return () => { unsubscribe(); };
+    return () => unsubscribe();
   }, [user]);
 
-  // Detector Cambios en Vivo
+  // 3. DETECTOR CAMBIOS EN VIVO
   useEffect(() => {
-      const qMatches = query(collection(db, 'calendario')); 
-      const unsubMatches = onSnapshot(qMatches, (snap) => {
-          const lives = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => m.estatus === 'vivo');
-          setLiveMatches(lives);
+      const unsubMatches = onSnapshot(query(collection(db, 'calendario')), (snap) => {
+          setLiveMatches(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => m.estatus === 'vivo'));
       });
+      const unsubNews = onSnapshot(query(collection(db, 'noticias'), orderBy('fecha', 'desc'), limit(1)), () => {});
       setTimeout(() => { initialLoadDone.current = true; }, 2000);
-      return () => { unsubMatches(); };
+      return () => { unsubMatches(); unsubNews(); };
   }, []);
   
-  // Auth
+  // 4. AUTH & PROFILE
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, (u) => {
+    return onAuthStateChanged(auth, (u) => {
       if (u) {
-        const unsubProfile = onSnapshot(doc(db, 'usuarios', u.uid), (docSnap) => {
+        onSnapshot(doc(db, 'usuarios', u.uid), (docSnap) => {
             if (docSnap.exists()) {
                 const data = docSnap.data();
-                setUser({ 
-                    uid: u.uid, 
-                    email: u.email, 
-                    rol: data.rol || 'pendiente', 
-                    equipoId: data.equipoId,
-                    nombre: data.nombre,
-                    cedula: data.cedula
-                });
+                setUser({ uid: u.uid, email: u.email, rol: data.rol || 'pendiente', equipoId: data.equipoId, nombre: data.nombre });
             } else { setUser({ uid: u.uid, email: u.email, rol: 'pendiente' }); }
             setLoading(false);
         });
-        return () => unsubProfile();
       } else { setUser(null); setLoading(false); }
     });
-    return () => unsubAuth();
   }, []);
 
-  // Carga Datos
+  // 5. CARGA DATOS GENERALES
   useEffect(() => {
     if (!user || user.rol === 'pendiente') return;
     const loadData = async () => {
         try {
             const eqSnap = await getDocs(collection(db, "equipos"));
-            setEquipos(eqSnap.docs.map(d => {
-                const data = d.data();
-                return { id: d.id, ...data, puntos: Number(data.puntos || 0) } as Equipo;
-            }));
-
-            let q;
-            if (user.rol === 'admin') q = query(collection(db, 'forma21s')); 
-            else if (user.rol === 'delegado') q = query(collection(db, 'forma21s'), where('delegadoId', '==', user.uid)); 
-            else q = query(collection(db, 'forma21s')); 
-
+            setEquipos(eqSnap.docs.map(d => ({ id: d.id, ...d.data(), puntos: Number(d.data().puntos || 0) } as Equipo)));
+            let q = user.rol === 'admin' ? query(collection(db, 'forma21s')) : user.rol === 'delegado' ? query(collection(db, 'forma21s'), where('delegadoId', '==', user.uid)) : query(collection(db, 'forma21s')); 
             const fSnap = await getDocs(q);
             const formasProcesadas = await Promise.all(fSnap.docs.map(async d => {
                 const jugSnap = await getDocs(collection(db, 'forma21s', d.id, 'jugadores'));
                 return { id: d.id, ...d.data(), rosterCompleto: jugSnap.size >= 5 } as Forma21;
             }));
             setFormas21(formasProcesadas);
-        } catch(e) { console.error("Error:", e); }
+        } catch(e) { console.error("Error cargando datos:", e); }
     };
     loadData();
   }, [user, dataRefreshKey]);
 
-  // --- ACCIONES ---
-
   const handleRoleSelect = async (rol: 'jugador' | 'fan') => {
       if (!user) return;
-      
-      let nombreIngresado = "";
-      let cedulaIngresada = "";
-
-      if (rol === 'jugador') {
-          nombreIngresado = prompt("⛹️ Para las estadísticas, ingresa tu Nombre y Apellido:") || "";
-          cedulaIngresada = prompt("🆔 Ingresa tu Cédula (debe coincidir con la de tu delegado):") || "";
-          
-          if (!nombreIngresado.trim() || !cedulaIngresada.trim()) {
-              alert("Nombre y Cédula son obligatorios para registrarse como jugador.");
-              return;
-          }
-      } else {
-          nombreIngresado = prompt("🏀 ¡Hola Fan! ¿Cómo te llamas?") || "";
-          if (!nombreIngresado.trim()) return;
-      }
-
-      try {
-          await updateDoc(doc(db, 'usuarios', user.uid), { 
-              rol: rol,
-              nombre: nombreIngresado.trim().toUpperCase(),
-              cedula: cedulaIngresada.trim()
-          });
-          alert(rol === 'jugador' ? "¡Perfil vinculado! Si tu delegado te inscribió, podrás subir tu foto ahora." : "¡Bienvenido Fan!");
-      } catch (error) {
-          console.error("Error asignando rol:", error);
-          alert("Error al asignar rol.");
-      }
+      const mensaje = rol === 'jugador' ? "⛹️ Para las estadísticas, ingresa tu Nombre y Apellido:" : "🏀 ¡Hola Fan! ¿Cómo te llamas?";
+      const nombreIngresado = prompt(mensaje);
+      if (!nombreIngresado || nombreIngresado.trim() === "") return;
+      try { await updateDoc(doc(db, 'usuarios', user.uid), { rol: rol, nombre: nombreIngresado.trim() });
+      } catch (error) { alert("Error al asignar rol."); }
   };
 
   const handleDelegadoSuccess = async () => {
       if (!user) return;
-      try { 
-          await updateDoc(doc(db, 'usuarios', user.uid), { rol: 'delegado' }); 
-          window.location.reload(); 
+      try { await updateDoc(doc(db, 'usuarios', user.uid), { rol: 'delegado' }); window.location.reload(); 
       } catch (e) { console.error(e); }
   };
 
@@ -265,20 +201,14 @@ function App() {
   
   if (user.rol === 'pendiente') {
       return (
-        <div className="login-wrapper" style={{
-            backgroundImage: 'url(https://i.postimg.cc/W11GDbLn/madera15.jpg)',
-            backgroundSize: 'cover', backgroundPosition: 'center', minHeight: '100vh',
-            display: 'flex', alignItems: 'center', justifyContent: 'center'
-        }}>
-            {registroView ? (
-                <RegistroForma21 onSuccess={handleDelegadoSuccess} onClose={() => setRegistroView(false)} />
-            ) : (
+        <div className="login-wrapper" style={{ backgroundImage: 'url(https://i.postimg.cc/W11GDbLn/madera15.jpg)', backgroundSize: 'cover', backgroundPosition: 'center', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {registroView ? <RegistroForma21 onSuccess={handleDelegadoSuccess} onClose={() => setRegistroView(false)} /> : (
                 <div className="login-box" style={{textAlign:'center', maxWidth:'450px', background:'rgba(255, 255, 255, 0.95)', padding:'30px', borderRadius:'15px', boxShadow:'0 10px 25px rgba(0,0,0,0.5)'}}>
                     <h2 style={{color:'#1f2937', marginBottom:'10px'}}>👋 Bienvenido</h2>
                     <p style={{color:'#666', marginBottom:'25px'}}>Selecciona cómo deseas participar:</p>
                     <div style={{display:'flex', flexDirection:'column', gap:'15px'}}>
                         <button onClick={() => setRegistroView(true)} className="btn btn-primary" style={{padding:'15px', fontSize:'1.1rem'}}>📋 Registrar Delegado (Crear Equipo)</button>
-                        <button onClick={() => handleRoleSelect('jugador')} className="btn" style={{padding:'15px', fontSize:'1.1rem', background:'#10b981', color:'white', border:'none', borderRadius:'6px', cursor:'pointer'}}>⛹️ Registrar Jugador</button>
+                        <button onClick={() => handleRoleSelect('jugador')} className="btn" style={{padding:'15px', fontSize:'1.1rem', background:'#10b981', color:'white', border:'none', borderRadius:'6px'}}>⛹️ Registrar Jugador</button>
                         <button onClick={() => handleRoleSelect('fan')} className="btn btn-secondary" style={{padding:'15px', fontSize:'1.1rem'}}>🏀 Registrar Fan</button>
                     </div>
                     <div style={{marginTop:'30px', borderTop:'1px solid #eee', paddingTop:'15px'}}>
@@ -290,25 +220,17 @@ function App() {
       );
   }
 
-  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView || adminEquiposView || showBracket || teamsView);
+  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView || adminEquiposView || showBracket);
 
   const DashboardCard = ({ title, icon, color, onClick, variant = 'normal' }: any) => (
-    <div onClick={onClick} className="dashboard-card" style={{
-        borderLeft: variant === 'admin' ? '4px solid #f59e0b' : `4px solid ${color}`,
-        background: 'white',
-        boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        padding: '20px', borderRadius: '12px', cursor: 'pointer', transition: 'transform 0.2s',
-        height: '140px'
-    }}>
+    <div onClick={onClick} className="dashboard-card" style={{ borderLeft: variant === 'admin' ? '4px solid #f59e0b' : `4px solid ${color}`, background: 'white', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px', borderRadius: '12px', cursor: 'pointer', transition: 'transform 0.2s', height: '140px' }}>
         <div style={{fontSize: '2.5rem', marginBottom: '10px'}}>{icon}</div>
         <div style={{fontWeight: 'bold', color: '#374151', fontSize: '0.95rem'}}>{title}</div>
     </div>
   );
 
   let displayName = user.nombre || user.email?.split('@')[0] || 'Usuario';
-  let displayTeamName = '';
-  let displayTeamLogo = '';
+  let displayTeamName = '', displayTeamLogo = '';
 
   if (user.equipoId) {
       const eq = equipos.find(e => e.id === user.equipoId);
@@ -319,24 +241,20 @@ function App() {
   }
 
   return (
-    <div className="app-container" style={{
-        backgroundImage: 'url(https://i.postimg.cc/wMdsqw2D/unnamed.jpg)',
-        backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed', minHeight: '100vh'
-    }}>
+    <div className="app-container" style={{ backgroundImage: 'url(https://i.postimg.cc/wMdsqw2D/unnamed.jpg)', backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed', minHeight: '100vh' }}>
       <header className="header" style={{background: 'white', padding: '10px 20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 100}}>
         <div style={{display: 'flex', alignItems: 'center', gap: '15px'}}>
-            <img src="https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg" alt="Liga Madera 15" style={{height: '50px', width: 'auto', borderRadius:'4px'}} />
+            <img src="https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg" alt="Logo" style={{height: '50px', borderRadius:'4px'}} />
             <h1 style={{fontSize: '1.2rem', margin: 0, color: '#1f2937', fontWeight: '800'}}>LIGA MADERA 15</h1>
         </div>
         <div style={{display: 'flex', alignItems: 'center', gap: '15px'}}>
             <InstallButton />
             <span style={{fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--primary)', background: '#eff6ff', padding: '4px 10px', borderRadius: '20px'}}>{user.rol.toUpperCase()}</span>
-            <button onClick={()=>signOut(auth)} style={{background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem'}} title="Salir">🚪</button>
+            <button onClick={()=>signOut(auth)} style={{background: 'none', border: 'none', fontSize: '1.2rem'}} title="Salir">🚪</button>
         </div>
       </header>
       
       <main className="main-content" style={{padding: '20px', maxWidth: '1200px', margin: '0 auto'}}>
-        
         {newsFeedView && <NewsFeed onClose={() => setNewsFeedView(false)} />}
         {liveMatchId && <LiveGameViewer matchId={liveMatchId} onClose={() => setLiveMatchId(null)} />}
         {detailMatchId && <MatchDetailViewer matchId={detailMatchId} onClose={() => setDetailMatchId(null)} rol={user.rol} />}
@@ -354,91 +272,63 @@ function App() {
         {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || user.uid} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
         {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={refreshData} />}
         {showBracket && <PlayoffBracket adminMode={user.rol === 'admin'} onClose={() => setShowBracket(false)} />}
-        {teamsView && <TeamsPublicViewer onClose={() => setTeamsView(false)} />}
 
         {isDashboard && (
             <div className="animate-fade-in">
-                
-                <div style={{
-                    background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', 
-                    borderRadius: '16px', padding: '25px', color: 'white', marginBottom: '30px', 
-                    boxShadow: '0 10px 25px -5px rgba(59, 130, 246, 0.5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-                }}>
+                <div style={{ background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', borderRadius: '16px', padding: '25px', color: 'white', marginBottom: '30px', boxShadow: '0 10px 25px -5px rgba(59, 130, 246, 0.5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
                         <div style={{display:'flex', alignItems:'center', gap:'10px'}}>
                             <h2 style={{margin: '0', fontSize: '1.8rem', fontWeight:'800'}}>Hola, {displayName} 👋</h2>
-                            <button onClick={handleEditName} title="Corregir nombre" style={{background:'rgba(255,255,255,0.2)', border:'none', borderRadius:'50%', cursor:'pointer', width:'30px', height:'30px', display:'flex', alignItems:'center', justifyContent:'center', color:'white'}}>✏️</button>
+                            <button onClick={handleEditName} title="Editar" style={{background:'rgba(255,255,255,0.2)', border:'none', borderRadius:'50%', cursor:'pointer', width:'30px', height:'30px', color:'white'}}>✏️</button>
                         </div>
                         <p style={{margin: '5px 0 0 0', opacity: 0.9, fontSize:'0.95rem', textTransform:'capitalize'}}>Rol: {user.rol}</p>
                     </div>
-
                     {displayTeamName && (
                          <div style={{textAlign:'right', display:'flex', flexDirection:'column', alignItems:'flex-end'}}>
-                            {displayTeamLogo ? (
-                                <img src={displayTeamLogo} alt={displayTeamName} style={{width:'55px', height:'55px', borderRadius:'50%', border:'3px solid rgba(255,255,255,0.8)', objectFit:'cover', marginBottom:'5px', background:'white'}} />
-                            ) : (
-                                <div style={{width:'55px', height:'55px', borderRadius:'50%', border:'3px solid rgba(255,255,255,0.8)', marginBottom:'5px', background:'rgba(255,255,255,0.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.5rem'}}>🛡️</div>
-                            )}
+                            {displayTeamLogo ? <img src={displayTeamLogo} alt="Logo" style={{width:'55px', height:'55px', borderRadius:'50%', border:'3px solid white', background:'white'}} /> : <div style={{width:'55px', height:'55px', borderRadius:'50%', border:'3px solid white', background:'rgba(255,255,255,0.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.5rem'}}>🛡️</div>}
                              <div style={{fontWeight:'bold', fontSize:'1rem'}}>{displayTeamName}</div>
-                             <div style={{fontSize:'0.75rem', opacity:0.8}}>Mi Equipo</div>
                          </div>
                     )}
                 </div>
 
                 {liveMatches.length > 0 && (
                     <div style={{marginBottom:'30px'}}>
-                        <h3 style={{color:'white', marginBottom:'15px', display:'flex', alignItems:'center', gap:'10px', animation:'pulse 2s infinite', textShadow:'0 2px 4px rgba(0,0,0,0.5)'}}>🔴 EN VIVO AHORA</h3>
-                        <div style={{display:'grid', gap:'15px'}}>
-                            {liveMatches.map((m: any) => (
-                                <div key={m.id} onClick={() => setLiveMatchId(m.id)} style={{background: 'linear-gradient(135deg, #111 0%, #222 100%)', borderRadius: '12px', padding: '20px', cursor: 'pointer', border: '2px solid #ef4444', boxShadow: '0 0 15px rgba(239, 68, 68, 0.4)', color: 'white', display:'flex', flexDirection:'column', alignItems:'center'}}>
-                                    <div style={{fontSize:'0.9rem', color:'#fbbf24', fontWeight:'bold', marginBottom:'10px'}}>{m.cancha ? `📍 ${m.cancha}` : '🔥 PARTIDO EN CURSO'}</div>
-                                    <div style={{display:'flex', justifyContent:'space-between', width:'100%', alignItems:'center', marginBottom:'15px'}}>
-                                        <div style={{textAlign:'center', flex:1}}><div style={{fontWeight:'bold', fontSize:'1.2rem'}}>{m.equipoLocalNombre}</div><div style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorLocal}</div></div>
-                                        <div style={{fontWeight:'bold', color:'#666', fontSize:'1.2rem'}}>VS</div>
-                                        <div style={{textAlign:'center', flex:1}}><div style={{fontWeight:'bold', fontSize:'1.2rem'}}>{m.equipoVisitanteNombre}</div><div style={{fontSize:'2.5rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorVisitante}</div></div>
-                                    </div>
-                                    <button className="btn" style={{background:'#ef4444', color:'white', width:'100%', fontWeight:'bold', padding:'12px', borderRadius:'8px', textTransform:'uppercase'}}>📺 Ver Transmisión Play-by-Play</button>
+                        <h3 style={{color:'white', marginBottom:'15px', display:'flex', alignItems:'center', gap:'10px', textShadow:'0 2px 4px rgba(0,0,0,0.5)'}}>🔴 EN VIVO AHORA</h3>
+                        {liveMatches.map((m: any) => (
+                            <div key={m.id} onClick={() => setLiveMatchId(m.id)} style={{background: '#111', borderRadius: '12px', padding: '20px', cursor: 'pointer', border: '2px solid #ef4444', color: 'white', textAlign:'center'}}>
+                                <div style={{fontSize:'0.9rem', color:'#fbbf24', fontWeight:'bold', marginBottom:'10px'}}>{m.cancha ? `📍 ${m.cancha}` : '🔥 PARTIDO EN CURSO'}</div>
+                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'15px'}}>
+                                    <div style={{flex:1}}><div style={{fontWeight:'bold'}}>{m.equipoLocalNombre}</div><div style={{fontSize:'2.5rem', fontWeight:'bold'}}>{m.marcadorLocal}</div></div>
+                                    <div style={{fontWeight:'bold', color:'#666'}}>VS</div>
+                                    <div style={{flex:1}}><div style={{fontWeight:'bold'}}>{m.equipoVisitanteNombre}</div><div style={{fontSize:'2.5rem', fontWeight:'bold'}}>{m.marcadorVisitante}</div></div>
                                 </div>
-                            ))}
-                        </div>
+                                <button className="btn" style={{background:'#ef4444', color:'white', width:'100%', fontWeight:'bold', padding:'12px', borderRadius:'8px'}}>📺 Ver Transmisión</button>
+                            </div>
+                        ))}
                     </div>
                 )}
 
-                <h3 style={{fontSize: '1.1rem', color: 'white', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em', textShadow:'0 2px 4px rgba(0,0,0,0.5)'}}>Zona de Torneo</h3>
+                <h3 style={{fontSize: '1.1rem', color: 'white', marginBottom: '15px', textTransform: 'uppercase', textShadow:'0 2px 4px rgba(0,0,0,0.5)'}}>Zona de Torneo</h3>
                 <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '20px', marginBottom: '40px'}}>
                     <DashboardCard title="Noticias" icon="📢" color="#ef4444" onClick={()=>setNewsFeedView(true)} />
                     <DashboardCard title="Calendario" icon="📅" color="#3b82f6" onClick={()=>setCalendarView(true)} />
                     <DashboardCard title="Tabla General" icon="🏆" color="#eab308" onClick={()=>setStandingsView(true)} />
                     <DashboardCard title="Líderes" icon="📊" color="#10b981" onClick={()=>setStatsView(true)} />
                     <DashboardCard title="Fase Final" icon="⚔️" color="#7c3aed" onClick={()=>setShowBracket(true)} />
-                    <DashboardCard title="Equipos" icon="🛡️" color="#6366f1" onClick={()=>setTeamsView(true)} />
                 </div>
 
                 {user.rol === 'delegado' && (
                     <div style={{marginBottom: '40px'}}>
-                        <h3 style={{fontSize: '1.1rem', color: 'white', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em', textShadow:'0 2px 4px rgba(0,0,0,0.5)'}}>Mi Equipo</h3>
-                        <DelegadoDashboard 
-                            formas21={formas21} 
-                            userUid={user.uid} 
-                            userEquipoId={user.equipoId || user.uid} 
-                            refreshData={refreshData} 
-                            setViewRosterId={setViewRosterId} 
-                            setSelectedFormId={setSelectedFormId} 
-                            setSelectForma5MatchId={setSelectForma5MatchId} 
-                            onRegister={() => setRegistroView(true)} 
-                        />
+                        <h3 style={{fontSize: '1.1rem', color: 'white', marginBottom: '15px', textTransform: 'uppercase', textShadow:'0 2px 4px rgba(0,0,0,0.5)'}}>Mi Equipo</h3>
+                        <DelegadoDashboard formas21={formas21} userUid={user.uid} userEquipoId={user.equipoId || user.uid} refreshData={refreshData} setViewRosterId={setViewRosterId} setSelectedFormId={setSelectedFormId} setSelectForma5MatchId={setSelectForma5MatchId} onRegister={() => setRegistroView(true)} />
                     </div>
                 )}
 
-                {user.rol === 'jugador' && (
-                    <div style={{marginTop:'30px'}}>
-                        <JugadorDashboard userCedula={user.cedula} userName={user.nombre} formas21={formas21} />
-                    </div>
-                )}
+                {user.rol === 'jugador' && <div style={{marginTop:'30px'}}><JugadorDashboard userEquipoId={user.equipoId||null} userName={user.email} formas21={formas21} setViewRosterId={setViewRosterId} /></div>}
 
                 {user.rol === 'admin' && (
                     <div>
-                        <h3 style={{fontSize: '1.1rem', color: 'white', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em', textShadow:'0 2px 4px rgba(0,0,0,0.5)'}}>Panel Administrativo</h3>
+                        <h3 style={{fontSize: '1.1rem', color: 'white', marginBottom: '15px', textTransform: 'uppercase', textShadow:'0 2px 4px rgba(0,0,0,0.5)'}}>Panel Administrativo</h3>
                         <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '20px'}}>
                             <DashboardCard title="Inscripciones" icon="📋" variant="admin" onClick={()=>setAdminFormView(true)} />
                             <DashboardCard title="Mesa Técnica" icon="🏀" variant="admin" onClick={()=>setMesaTecnicaView(true)} />
@@ -456,4 +346,5 @@ function App() {
     </div>
   );
 }
+
 export default App;
