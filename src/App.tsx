@@ -28,6 +28,7 @@ import NewsFeed from './NewsFeed';
 import AdminEquipos from './AdminEquipos';
 import PlayoffBracket from './PlayoffBracket'; 
 import InstallButton from './InstallButton';
+import TeamsPublicViewer from './TeamsPublicViewer'; 
 
 // Interfaces
 interface Equipo { 
@@ -47,6 +48,7 @@ interface UsuarioData extends DocumentData {
     rol: 'admin' | 'delegado' | 'pendiente' | 'jugador' | 'fan'; 
     equipoId?: string;
     nombre?: string;
+    cedula?: string;
 }
 
 interface Forma21 extends DocumentData { 
@@ -87,6 +89,7 @@ function App() {
   const [newsFeedView, setNewsFeedView] = useState(false);
   const [adminEquiposView, setAdminEquiposView] = useState(false);
   const [showBracket, setShowBracket] = useState(false); 
+  const [teamsView, setTeamsView] = useState(false); 
   
   const [dataRefreshKey, setDataRefreshKey] = useState(0); 
   
@@ -98,6 +101,7 @@ function App() {
     setViewRosterId(null); setMatchView(false); setAdminFormView(false); setUsersView(false); setRegistroView(false);
     setSelectedFormId(null); setCalendarView(false); setMesaTecnicaView(false); setStatsView(false); setStandingsView(false); setSelectForma5MatchId(null);
     setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false);
+    setTeamsView(false);
   };
 
   const sendNotification = (title: string, body: string, icon = 'https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg') => {
@@ -132,45 +136,27 @@ function App() {
     if (user) getTokenFCM();
   }, [user]); 
 
-  // 2. ESCUCHAR MENSAJES (Corrección de duplicados)
+  // 2. ESCUCHAR MENSAJES
   useEffect(() => {
     if (!user || !messaging) return;
-
-    // Activamos el "oído" para escuchar mensajes
     const unsubscribe = onMessage(messaging, (payload) => {
         console.log('Mensaje FCM recibido:', payload);
         const titulo = payload.notification?.title || "¡Nueva Notificación!";
         const cuerpo = payload.notification?.body || "Revisa la app para más detalles.";
         sendNotification(titulo, cuerpo);
     });
-
-    // Esta línea es mágica: Limpia el "oído" anterior si la app se recarga
-    return () => {
-        unsubscribe();
-    };
+    return () => { unsubscribe(); };
   }, [user]);
 
-  // Detector Cambios en Vivo (Solo actualiza datos, NO notifica)
+  // Detector Cambios en Vivo
   useEffect(() => {
       const qMatches = query(collection(db, 'calendario')); 
       const unsubMatches = onSnapshot(qMatches, (snap) => {
           const lives = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => m.estatus === 'vivo');
           setLiveMatches(lives);
-
-          if (initialLoadDone.current) {
-              console.log("Datos actualizados (Sin notificación local)");
-          }
       });
-
-      const qNews = query(collection(db, 'noticias'), orderBy('fecha', 'desc'), limit(1));
-      const unsubNews = onSnapshot(qNews, (snap) => {
-          if (initialLoadDone.current) {
-             console.log("Noticias actualizadas (Sin notificación local)");
-          }
-      });
-
       setTimeout(() => { initialLoadDone.current = true; }, 2000);
-      return () => { unsubMatches(); unsubNews(); };
+      return () => { unsubMatches(); };
   }, []);
   
   // Auth
@@ -185,7 +171,8 @@ function App() {
                     email: u.email, 
                     rol: data.rol || 'pendiente', 
                     equipoId: data.equipoId,
-                    nombre: data.nombre 
+                    nombre: data.nombre,
+                    cedula: data.cedula
                 });
             } else { setUser({ uid: u.uid, email: u.email, rol: 'pendiente' }); }
             setLoading(false);
@@ -228,19 +215,29 @@ function App() {
   const handleRoleSelect = async (rol: 'jugador' | 'fan') => {
       if (!user) return;
       
-      const mensaje = rol === 'jugador' 
-          ? "⛹️ Para las estadísticas, ingresa tu Nombre y Apellido:" 
-          : "🏀 ¡Hola Fan! ¿Cómo te llamas?";
-          
-      const nombreIngresado = prompt(mensaje);
+      let nombreIngresado = "";
+      let cedulaIngresada = "";
 
-      if (!nombreIngresado || nombreIngresado.trim() === "") return;
+      if (rol === 'jugador') {
+          nombreIngresado = prompt("⛹️ Para las estadísticas, ingresa tu Nombre y Apellido:") || "";
+          cedulaIngresada = prompt("🆔 Ingresa tu Cédula (debe coincidir con la de tu delegado):") || "";
+          
+          if (!nombreIngresado.trim() || !cedulaIngresada.trim()) {
+              alert("Nombre y Cédula son obligatorios para registrarse como jugador.");
+              return;
+          }
+      } else {
+          nombreIngresado = prompt("🏀 ¡Hola Fan! ¿Cómo te llamas?") || "";
+          if (!nombreIngresado.trim()) return;
+      }
 
       try {
           await updateDoc(doc(db, 'usuarios', user.uid), { 
               rol: rol,
-              nombre: nombreIngresado.trim() 
+              nombre: nombreIngresado.trim().toUpperCase(),
+              cedula: cedulaIngresada.trim()
           });
+          alert(rol === 'jugador' ? "¡Perfil vinculado! Si tu delegado te inscribió, podrás subir tu foto ahora." : "¡Bienvenido Fan!");
       } catch (error) {
           console.error("Error asignando rol:", error);
           alert("Error al asignar rol.");
@@ -270,13 +267,8 @@ function App() {
       return (
         <div className="login-wrapper" style={{
             backgroundImage: 'url(https://i.postimg.cc/W11GDbLn/madera15.jpg)',
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat',
-            minHeight: '100vh',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
+            backgroundSize: 'cover', backgroundPosition: 'center', minHeight: '100vh',
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
         }}>
             {registroView ? (
                 <RegistroForma21 onSuccess={handleDelegadoSuccess} onClose={() => setRegistroView(false)} />
@@ -285,7 +277,7 @@ function App() {
                     <h2 style={{color:'#1f2937', marginBottom:'10px'}}>👋 Bienvenido</h2>
                     <p style={{color:'#666', marginBottom:'25px'}}>Selecciona cómo deseas participar:</p>
                     <div style={{display:'flex', flexDirection:'column', gap:'15px'}}>
-                        <button onClick={() => setRegistroView(true)} className="btn btn-primary" style={{padding:'15px', fontSize:'1.1rem', display:'flex', alignItems:'center', justifyContent:'center', gap:'10px'}}>📋 Registrar Delegado (Crear Equipo)</button>
+                        <button onClick={() => setRegistroView(true)} className="btn btn-primary" style={{padding:'15px', fontSize:'1.1rem'}}>📋 Registrar Delegado (Crear Equipo)</button>
                         <button onClick={() => handleRoleSelect('jugador')} className="btn" style={{padding:'15px', fontSize:'1.1rem', background:'#10b981', color:'white', border:'none', borderRadius:'6px', cursor:'pointer'}}>⛹️ Registrar Jugador</button>
                         <button onClick={() => handleRoleSelect('fan')} className="btn btn-secondary" style={{padding:'15px', fontSize:'1.1rem'}}>🏀 Registrar Fan</button>
                     </div>
@@ -298,7 +290,7 @@ function App() {
       );
   }
 
-  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView || adminEquiposView || showBracket);
+  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView || adminEquiposView || showBracket || teamsView);
 
   const DashboardCard = ({ title, icon, color, onClick, variant = 'normal' }: any) => (
     <div onClick={onClick} className="dashboard-card" style={{
@@ -314,20 +306,9 @@ function App() {
     </div>
   );
 
-  let displayName = user.nombre; 
+  let displayName = user.nombre || user.email?.split('@')[0] || 'Usuario';
   let displayTeamName = '';
   let displayTeamLogo = '';
-
-  if (!displayName && user.rol === 'delegado') {
-      const f21 = formas21.find(f => f.delegadoId === user.uid);
-      if (f21 && f21.nombreDelegado) {
-          displayName = f21.nombreDelegado; 
-      }
-  }
-
-  if (!displayName) {
-      displayName = user.email?.split('@')[0] || 'Usuario';
-  }
 
   if (user.equipoId) {
       const eq = equipos.find(e => e.id === user.equipoId);
@@ -373,6 +354,7 @@ function App() {
         {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || user.uid} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
         {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={refreshData} />}
         {showBracket && <PlayoffBracket adminMode={user.rol === 'admin'} onClose={() => setShowBracket(false)} />}
+        {teamsView && <TeamsPublicViewer onClose={() => setTeamsView(false)} />}
 
         {isDashboard && (
             <div className="animate-fade-in">
@@ -429,6 +411,7 @@ function App() {
                     <DashboardCard title="Tabla General" icon="🏆" color="#eab308" onClick={()=>setStandingsView(true)} />
                     <DashboardCard title="Líderes" icon="📊" color="#10b981" onClick={()=>setStatsView(true)} />
                     <DashboardCard title="Fase Final" icon="⚔️" color="#7c3aed" onClick={()=>setShowBracket(true)} />
+                    <DashboardCard title="Equipos" icon="🛡️" color="#6366f1" onClick={()=>setTeamsView(true)} />
                 </div>
 
                 {user.rol === 'delegado' && (
@@ -449,7 +432,7 @@ function App() {
 
                 {user.rol === 'jugador' && (
                     <div style={{marginTop:'30px'}}>
-                        <JugadorDashboard userEquipoId={user.equipoId||null} userName={user.email} formas21={formas21} setViewRosterId={setViewRosterId} />
+                        <JugadorDashboard userCedula={user.cedula} userName={user.nombre} formas21={formas21} />
                     </div>
                 )}
 
