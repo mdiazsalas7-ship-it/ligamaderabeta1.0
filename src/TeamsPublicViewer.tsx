@@ -320,7 +320,8 @@ const TeamsPublicViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                                             cursor:'pointer', transition:'transform 0.2s', border:'1px solid #e5e7eb', background:'white', borderRadius:'12px', boxShadow:'0 2px 5px rgba(0,0,0,0.05)'
                                         }}>
                                             <div style={{width:'80px', height:'80px', borderRadius:'50%', background:'#f9fafb', marginBottom:'15px', display:'flex', alignItems:'center', justifyContent:'center', border:'1px solid #eee', overflow:'hidden'}}>
-                                                <img src={team.logoUrl || DEFAULT_TEAM_LOGO} style={{width:'100%', height:'100%', objectFit:'contain'}} onError={(e:any)=>{e.target.src=DEFAULT_TEAM_LOGO}} />
+                                                {/* AQUÍ ESTÁ EL CAMBIO A COVER */}
+                                                <img src={team.logoUrl || DEFAULT_TEAM_LOGO} style={{width:'100%', height:'100%', objectFit:'cover'}} onError={(e:any)=>{e.target.src=DEFAULT_TEAM_LOGO}} />
                                             </div>
                                             <div style={{fontWeight:'bold', textAlign:'center', color:'#1f2937', fontSize:'0.95rem'}}>{team.nombre}</div>
                                         </div>
@@ -332,7 +333,8 @@ const TeamsPublicViewer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                         <div style={{maxWidth:'800px', margin:'0 auto'}}>
                             <div style={{display:'flex', alignItems:'center', gap:'20px', marginBottom:'20px', background:'white', padding:'20px', borderRadius:'12px', boxShadow:'0 2px 4px rgba(0,0,0,0.05)'}}>
                                 <div style={{width:'70px', height:'70px', borderRadius:'50%', border:'2px solid #eee', overflow:'hidden', display:'flex', alignItems:'center', justifyContent:'center'}}>
-                                    <img src={selectedTeam?.logoUrl || DEFAULT_TEAM_LOGO} style={{width:'100%', height:'100%', objectFit:'contain'}} onError={(e:any)=>{e.target.src=DEFAULT_TEAM_LOGO}} />
+                                    {/* AQUÍ ESTÁ EL CAMBIO A COVER */}
+                                    <img src={selectedTeam?.logoUrl || DEFAULT_TEAM_LOGO} style={{width:'100%', height:'100%', objectFit:'cover'}} onError={(e:any)=>{e.target.src=DEFAULT_TEAM_LOGO}} />
                                 </div>
                                 <div>
                                     <h3 style={{margin:0, color:'#1f2937', fontSize:'1.5rem'}}>{selectedTeam?.nombre}</h3>
