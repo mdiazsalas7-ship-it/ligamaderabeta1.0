@@ -2,10 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, getDocs, deleteDoc, addDoc } from 'firebase/firestore';
 
+// --- CONSTANTE PARA LOGO POR DEFECTO ---
+const DEFAULT_TEAM_LOGO = "https://cdn-icons-png.flaticon.com/512/451/451716.png";
+
 interface Match {
     id: string;
     equipoLocalNombre: string;
     equipoVisitanteNombre: string;
+    // Agregamos los IDs para poder buscar el logo
+    equipoLocalId?: string;
+    equipoVisitanteId?: string;
     fechaAsignada: string;
     hora: string;
     estatus: string; 
@@ -13,7 +19,6 @@ interface Match {
     marcadorLocal?: number;
     marcadorVisitante?: number;
     jornada?: number;
-    // Agregamos los datos de suspensión a la interfaz para leerlos
     datosSuspension?: {
         motivo: string;
         tiempoRestante: string;
@@ -51,7 +56,7 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
             setLoading(false);
         });
 
-        // 2. Cargar Lobby
+        // 2. Cargar Lobby (Para obtener los logos)
         const fetchLobby = async () => {
             try {
                 const qTeams = query(collection(db, 'forma21s'), where('estatus', '==', 'aprobado'));
@@ -65,13 +70,19 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
     }, []);
 
     // --- FILTRADO DE JUEGOS ---
-    // 'upcoming' incluye programados, vivos y SUSPENDIDOS
     const upcomingMatches = matches.filter(m => m.estatus !== 'finalizado');
     const finishedMatches = matches.filter(m => m.estatus === 'finalizado');
     
     finishedMatches.sort((a,b) => b.fechaAsignada.localeCompare(a.fechaAsignada));
 
     const showLobby = matches.length === 0;
+
+    // --- HELPER PARA BUSCAR LOGO ---
+    const getTeamLogo = (teamId?: string) => {
+        if (!teamId) return DEFAULT_TEAM_LOGO;
+        const team = approvedTeams.find(t => t.id === teamId);
+        return team?.logoUrl || DEFAULT_TEAM_LOGO;
+    };
 
     // --- REINICIAR TEMPORADA ---
     const handleResetSeason = async () => {
@@ -232,13 +243,16 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                         const isEditing = editingMatchId === m.id;
                         const isLive = m.estatus === 'vivo';
                         const isFinished = m.estatus === 'finalizado';
-                        const isSuspended = m.estatus === 'suspendido'; // Nuevo estado
+                        const isSuspended = m.estatus === 'suspendido';
 
-                        // Color del borde según estado
-                        let borderColor = '#3b82f6'; // Programado (Azul)
-                        if (isLive) borderColor = '#ef4444'; // Vivo (Rojo)
-                        if (isFinished) borderColor = '#6b7280'; // Finalizado (Gris)
-                        if (isSuspended) borderColor = '#f59e0b'; // Suspendido (Naranja/Amarillo)
+                        let borderColor = '#3b82f6';
+                        if (isLive) borderColor = '#ef4444'; 
+                        if (isFinished) borderColor = '#6b7280'; 
+                        if (isSuspended) borderColor = '#f59e0b'; 
+
+                        // Buscamos los logos
+                        const localLogo = getTeamLogo(m.equipoLocalId);
+                        const visitorLogo = getTeamLogo(m.equipoVisitanteId);
 
                         return (
                             <div key={m.id} className="card" style={{display:'flex', flexDirection:'column', gap:'10px', borderLeft: `5px solid ${borderColor}`, position: 'relative'}}>
@@ -258,7 +272,6 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                                             <div style={{fontSize:'0.9rem', color:'#6b7280', fontWeight:'bold'}}>
                                                 📅 {m.fechaAsignada} &nbsp; ⏰ {m.hora}
                                             </div>
-                                            {/* El botón de editar aparece si NO está finalizado y NO está vivo (o sea, Programado o Suspendido) */}
                                             {rol === 'admin' && !isFinished && !isLive && (
                                                 <button 
                                                     onClick={() => {setEditingMatchId(m.id); setEditDate(m.fechaAsignada); setEditTime(m.hora);}} 
@@ -288,23 +301,33 @@ const CalendarViewer: React.FC<{ rol: string, onClose: () => void, onViewLive: (
                                     </div>
                                 )}
 
-                                {/* MARCADOR */}
-                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0'}}>
-                                    <div style={{textAlign:'center', flex:1}}>
-                                        <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{m.equipoLocalNombre}</div>
-                                        {(isLive || isFinished || isSuspended) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorLocal}</div>}
+                                {/* MARCADOR CON LOGOS */}
+                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'15px 0'}}>
+                                    {/* LOCAL */}
+                                    <div style={{textAlign:'center', flex:1, display:'flex', flexDirection:'column', alignItems:'center'}}>
+                                        <div style={{width:'50px', height:'50px', borderRadius:'50%', border:'2px solid #eee', overflow:'hidden', marginBottom:'5px', display:'flex', justifyContent:'center', alignItems:'center', background:'white'}}>
+                                            <img src={localLogo} style={{width:'100%', height:'100%', objectFit:'cover'}} alt="Local" onError={(e:any)=>{e.target.src=DEFAULT_TEAM_LOGO}} />
+                                        </div>
+                                        <div style={{fontWeight:'bold', fontSize:'1.1rem', lineHeight:1.1}}>{m.equipoLocalNombre}</div>
+                                        {(isLive || isFinished || isSuspended) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1, marginTop:'5px'}}>{m.marcadorLocal}</div>}
                                     </div>
-                                    <div style={{fontWeight:'bold', color:'#9ca3af', fontSize:'1.5rem'}}>VS</div>
-                                    <div style={{textAlign:'center', flex:1}}>
-                                        <div style={{fontWeight:'bold', fontSize:'1.1rem'}}>{m.equipoVisitanteNombre}</div>
-                                        {(isLive || isFinished || isSuspended) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1}}>{m.marcadorVisitante}</div>}
+
+                                    {/* VS */}
+                                    <div style={{fontWeight:'bold', color:'#9ca3af', fontSize:'1.2rem', padding:'0 10px'}}>VS</div>
+
+                                    {/* VISITANTE */}
+                                    <div style={{textAlign:'center', flex:1, display:'flex', flexDirection:'column', alignItems:'center'}}>
+                                        <div style={{width:'50px', height:'50px', borderRadius:'50%', border:'2px solid #eee', overflow:'hidden', marginBottom:'5px', display:'flex', justifyContent:'center', alignItems:'center', background:'white'}}>
+                                            <img src={visitorLogo} style={{width:'100%', height:'100%', objectFit:'cover'}} alt="Visita" onError={(e:any)=>{e.target.src=DEFAULT_TEAM_LOGO}} />
+                                        </div>
+                                        <div style={{fontWeight:'bold', fontSize:'1.1rem', lineHeight:1.1}}>{m.equipoVisitanteNombre}</div>
+                                        {(isLive || isFinished || isSuspended) && <div style={{fontSize:'2rem', fontWeight:'bold', lineHeight:1, marginTop:'5px'}}>{m.marcadorVisitante}</div>}
                                     </div>
                                 </div>
 
                                 {/* BOTONES DE ACCIÓN */}
                                 {isLive && <button onClick={() => onViewLive(m.id)} className="btn" style={{width:'100%', background:'#ef4444', color:'white', border:'none'}}>📺 Ver Partido en Vivo</button>}
                                 
-                                {/* BOTÓN DE REANUDAR (Si está suspendido) */}
                                 {isSuspended && (
                                     <button 
                                         onClick={() => onViewLive(m.id)} 
