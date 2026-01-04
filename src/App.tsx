@@ -28,6 +28,7 @@ import NewsFeed from './NewsFeed';
 import AdminEquipos from './AdminEquipos';
 import PlayoffBracket from './PlayoffBracket'; 
 import InstallButton from './InstallButton';
+import TeamsPublicViewer from './TeamsPublicViewer'; // Asegúrate que esté importado
 
 interface Equipo { 
     id: string; 
@@ -46,6 +47,7 @@ interface UsuarioData extends DocumentData {
     rol: 'admin' | 'delegado' | 'pendiente' | 'jugador' | 'fan'; 
     equipoId?: string;
     nombre?: string;
+    cedula?: string; // 1. AGREGADO: Campo Cédula
 }
 
 interface Forma21 extends DocumentData { 
@@ -85,6 +87,8 @@ function App() {
   const [newsFeedView, setNewsFeedView] = useState(false);
   const [adminEquiposView, setAdminEquiposView] = useState(false);
   const [showBracket, setShowBracket] = useState(false); 
+  const [teamsView, setTeamsView] = useState(false); // Vista pública de equipos
+
   const [dataRefreshKey, setDataRefreshKey] = useState(0); 
   const initialLoadDone = useRef(false);
 
@@ -94,7 +98,7 @@ function App() {
     setViewRosterId(null); setMatchView(false); setAdminFormView(false); setUsersView(false); setRegistroView(false);
     setSelectedFormId(null); setCalendarView(false); setMesaTecnicaView(false); setStatsView(false); setStandingsView(false); 
     setSelectForma5MatchId(null); setLiveMatchId(null); setDetailMatchId(null); setNewsAdminView(false); 
-    setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false);
+    setNewsFeedView(false); setAdminEquiposView(false); setShowBracket(false); setTeamsView(false);
   };
 
   const sendNotification = (title: string, body: string, icon = 'https://i.postimg.cc/Hx1t81vH/FORMA-21-MORICHAL.jpg') => {
@@ -146,7 +150,15 @@ function App() {
         onSnapshot(doc(db, 'usuarios', u.uid), (docSnap) => {
             if (docSnap.exists()) {
                 const data = docSnap.data();
-                setUser({ uid: u.uid, email: u.email, rol: data.rol || 'pendiente', equipoId: data.equipoId, nombre: data.nombre });
+                // 2. MODIFICADO: Leemos la cédula de la base de datos
+                setUser({ 
+                    uid: u.uid, 
+                    email: u.email, 
+                    rol: data.rol || 'pendiente', 
+                    equipoId: data.equipoId, 
+                    nombre: data.nombre,
+                    cedula: data.cedula 
+                });
             } else { setUser({ uid: u.uid, email: u.email, rol: 'pendiente' }); }
             setLoading(false);
         });
@@ -173,19 +185,43 @@ function App() {
     loadData();
   }, [user, dataRefreshKey]);
 
+  // 3. MODIFICADO: Pide Cédula si es jugador
   const handleRoleSelect = async (rol: 'jugador' | 'fan') => {
       if (!user) return;
-      const mensaje = rol === 'jugador' ? "⛹️ Para las estadísticas, ingresa tu Nombre y Apellido:" : "🏀 ¡Hola Fan! ¿Cómo te llamas?";
-      const nombreIngresado = prompt(mensaje);
-      if (!nombreIngresado || nombreIngresado.trim() === "") return;
-      try { await updateDoc(doc(db, 'usuarios', user.uid), { rol: rol, nombre: nombreIngresado.trim() });
+      
+      let nombreIngresado = "";
+      let cedulaIngresada = "";
+
+      if (rol === 'jugador') {
+          nombreIngresado = prompt("⛹️ Nombre y Apellido (Como aparece en el Roster):") || "";
+          cedulaIngresada = prompt("🆔 Número de Cédula:") || "";
+          
+          if (!nombreIngresado.trim() || !cedulaIngresada.trim()) {
+              alert("Nombre y Cédula son obligatorios para validar tu ficha.");
+              return;
+          }
+      } else {
+          nombreIngresado = prompt("🏀 ¡Hola Fan! ¿Cómo te llamas?") || "";
+          if (!nombreIngresado.trim()) return;
+      }
+
+      try { 
+          await updateDoc(doc(db, 'usuarios', user.uid), { 
+              rol: rol, 
+              nombre: nombreIngresado.trim().toUpperCase(),
+              cedula: cedulaIngresada.trim()
+          });
       } catch (error) { alert("Error al asignar rol."); }
   };
 
   const handleDelegadoSuccess = async () => {
       if (!user) return;
-      try { await updateDoc(doc(db, 'usuarios', user.uid), { rol: 'delegado' }); window.location.reload(); 
-      } catch (e) { console.error(e); }
+      try { 
+          await updateDoc(doc(db, 'usuarios', user.uid), { rol: 'delegado' }); 
+          // Quitamos el reload, dejamos que el onSnapshot haga el trabajo
+          refreshData(); 
+      } 
+      catch (e) { console.error(e); }
   };
 
   const handleEditName = async () => {
@@ -220,7 +256,7 @@ function App() {
       );
   }
 
-  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView || adminEquiposView || showBracket);
+  const isDashboard = !(viewRosterId || matchView || adminFormView || usersView || registroView || selectedFormId || calendarView || mesaTecnicaView || statsView || standingsView || selectForma5MatchId || liveMatchId || detailMatchId || newsAdminView || newsFeedView || adminEquiposView || showBracket || teamsView);
 
   const DashboardCard = ({ title, icon, color, onClick, variant = 'normal' }: any) => (
     <div onClick={onClick} className="dashboard-card" style={{ borderLeft: variant === 'admin' ? '4px solid #f59e0b' : `4px solid ${color}`, background: 'white', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px', borderRadius: '12px', cursor: 'pointer', transition: 'transform 0.2s', height: '140px' }}>
@@ -272,6 +308,7 @@ function App() {
         {selectForma5MatchId && <Forma5Selector calendarioId={selectForma5MatchId} equipoId={user.equipoId || user.uid} onSuccess={() => { setSelectForma5MatchId(null); refreshData(); }} onClose={() => setSelectForma5MatchId(null)} />}
         {mesaTecnicaView && <MesaTecnica onClose={() => setMesaTecnicaView(false)} onMatchFinalized={refreshData} />}
         {showBracket && <PlayoffBracket adminMode={user.rol === 'admin'} onClose={() => setShowBracket(false)} />}
+        {teamsView && <TeamsPublicViewer onClose={() => setTeamsView(false)} />}
 
         {isDashboard && (
             <div className="animate-fade-in">
@@ -315,6 +352,7 @@ function App() {
                     <DashboardCard title="Tabla General" icon="🏆" color="#eab308" onClick={()=>setStandingsView(true)} />
                     <DashboardCard title="Líderes" icon="📊" color="#10b981" onClick={()=>setStatsView(true)} />
                     <DashboardCard title="Fase Final" icon="⚔️" color="#7c3aed" onClick={()=>setShowBracket(true)} />
+                    <DashboardCard title="Equipos" icon="🛡️" color="#6366f1" onClick={()=>setTeamsView(true)} />
                 </div>
 
                 {user.rol === 'delegado' && (
@@ -324,7 +362,17 @@ function App() {
                     </div>
                 )}
 
-                {user.rol === 'jugador' && <div style={{marginTop:'30px'}}><JugadorDashboard userEquipoId={user.equipoId||null} userName={user.email} formas21={formas21} setViewRosterId={setViewRosterId} /></div>}
+                {user.rol === 'jugador' && (
+                    <div style={{marginTop:'30px'}}>
+                        {/* 4. MODIFICADO: Pasa userCedula al dashboard */}
+                        <JugadorDashboard 
+                            userCedula={user.cedula || null} 
+                            userName={user.nombre || user.email} 
+                            formas21={formas21} 
+                            setViewRosterId={setViewRosterId} 
+                        />
+                    </div>
+                )}
 
                 {user.rol === 'admin' && (
                     <div>

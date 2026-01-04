@@ -2,31 +2,34 @@ import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
 import { collection, addDoc, getDocs, doc, deleteDoc, updateDoc, getDoc } from 'firebase/firestore';
 
-// 1. AGREGAMOS CÉDULA Y TELÉFONO A LA INTERFAZ
-interface Player { id: string; nombre: string; numero: number; cedula: string; telefono: string; }
+interface Player { 
+    id: string; 
+    nombre: string; 
+    numero: number; 
+    cedula: string; 
+    telefono: string; 
+}
 
 const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess: () => void, onClose: () => void }> = ({ forma21Id, nombreEquipo, onSuccess, onClose }) => {
     const [players, setPlayers] = useState<Player[]>([]);
     
-    // 2. ESTADOS PARA LOS NUEVOS CAMPOS
+    // Estados de los campos
     const [nombre, setNombre] = useState('');
     const [numero, setNumero] = useState('');
-    const [cedula, setCedula] = useState(''); // Nuevo
-    const [telefono, setTelefono] = useState(''); // Nuevo
+    const [cedula, setCedula] = useState('');
+    const [telefono, setTelefono] = useState('');
     
-    // CAMPOS PARA STAFF
+    // Estados del Staff
     const [entrenador, setEntrenador] = useState('');
     const [asistente, setAsistente] = useState('');
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
         const fetchData = async () => {
-            // Cargar Jugadores
             const colRef = collection(db, 'forma21s', forma21Id, 'jugadores');
             const snap = await getDocs(colRef);
             setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Player)));
 
-            // Cargar Staff existente
             const docRef = doc(db, 'forma21s', forma21Id);
             const docSnap = await getDoc(docRef);
             if (docSnap.exists()) {
@@ -38,7 +41,6 @@ const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess:
         fetchData();
     }, [forma21Id]);
 
-    // --- TU LÓGICA ORIGINAL (NO SE TOCA) ---
     const notifyChangeToAdmin = async (playerCount: number) => {
         const docRef = doc(db, 'forma21s', forma21Id);
         await updateDoc(docRef, {
@@ -50,19 +52,17 @@ const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess:
         try {
             await updateDoc(doc(db, 'equipos', forma21Id), { estatus: 'pendiente' });
         } catch (e) {
-            // Ignorar si no existe en equipos
+            console.error(e);
         }
     };
 
     const handleAddPlayer = async (e: React.FormEvent) => {
         e.preventDefault();
-        // 3. VALIDAMOS QUE NO ESTÉN VACÍOS
         if (!nombre || !numero || !cedula || !telefono) {
             alert("Todos los campos (Nombre, #, Cédula, Teléfono) son obligatorios.");
             return;
         }
 
-        // VALIDACIÓN DE LÍMITE (TU LÓGICA)
         if (players.length >= 15) {
             alert("⚠️ Has alcanzado el límite máximo de 15 jugadores.");
             return;
@@ -70,16 +70,14 @@ const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess:
         
         setLoading(true);
         try {
-            // 4. GUARDAMOS LOS NUEVOS DATOS EN FIREBASE
             await addDoc(collection(db, 'forma21s', forma21Id, 'jugadores'), { 
                 nombre: nombre.toUpperCase(), 
                 numero: parseInt(numero),
-                cedula: cedula,       // Guardar cédula
-                telefono: telefono,   // Guardar teléfono
+                cedula: cedula,
+                telefono: telefono,
                 equipoId: forma21Id 
             });
 
-            // Recargar lista localmente
             const newPlayers = [...players, { 
                 id: 'temp', 
                 nombre: nombre.toUpperCase(), 
@@ -88,13 +86,10 @@ const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess:
                 telefono
             }];
             
-            // 🔔 Notificar cambio (TU LÓGICA)
             await notifyChangeToAdmin(players.length + 1);
 
-            // Limpiar inputs
             setNombre(''); setNumero(''); setCedula(''); setTelefono('');
             
-            // Recargar real de DB
             const colRef = collection(db, 'forma21s', forma21Id, 'jugadores');
             const snap = await getDocs(colRef);
             setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Player)));
@@ -111,10 +106,7 @@ const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess:
         
         try {
             await deleteDoc(doc(db, 'forma21s', forma21Id, 'jugadores', id));
-            
-            // 🔔 Notificar cambio (TU LÓGICA)
             await notifyChangeToAdmin(players.length - 1);
-
             setPlayers(prev => prev.filter(p => p.id !== id));
         } catch (error) {
             console.error(error);
@@ -131,9 +123,7 @@ const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess:
                 asistente: asistente.toUpperCase()
             });
 
-            // 🔔 Notificar cambio (TU LÓGICA)
             await notifyChangeToAdmin(players.length);
-
             alert("✅ Cuerpo Técnico actualizado. Tu equipo ha pasado a estatus PENDIENTE para revisión del Admin.");
         } catch (error) {
             console.error(error);
@@ -151,15 +141,10 @@ const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess:
                     <button onClick={onClose} style={{background:'none', border:'none', fontSize:'1.5rem', cursor:'pointer'}}>✕</button>
                 </div>
 
-                {/* AVISO DE CAMBIOS */}
-                <div style={{
-                    background: '#fff7ed', borderLeft: '4px solid #f97316', 
-                    padding: '10px', marginBottom: '20px', fontSize: '0.85rem', color: '#9a3412'
-                }}>
-                    ⚠️ <strong>Aviso:</strong> Cualquier cambio (agregar jugador, borrar o editar staff) cambiará el estatus de tu equipo a <strong>"PENDIENTE"</strong>. El administrador deberá aprobar los cambios nuevamente.
+                <div style={{background: '#fff7ed', borderLeft: '4px solid #f97316', padding: '10px', marginBottom: '20px', fontSize: '0.85rem', color: '#9a3412'}}>
+                    ⚠️ <strong>Aviso:</strong> Cualquier cambio cambiará el estatus de tu equipo a <strong>"PENDIENTE"</strong>.
                 </div>
 
-                {/* SECCIÓN CUERPO TÉCNICO */}
                 <div style={{background:'#f0f9ff', padding:'15px', borderRadius:'8px', marginBottom:'20px', border:'1px solid #bae6fd'}}>
                     <h4 style={{margin:'0 0 10px 0', color:'#0369a1'}}>👔 Cuerpo Técnico</h4>
                     <div style={{display:'grid', gap:'10px', gridTemplateColumns:'1fr 1fr'}}>
@@ -177,7 +162,6 @@ const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess:
                     </button>
                 </div>
 
-                {/* SECCIÓN JUGADORES */}
                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px'}}>
                     <h4 style={{margin:0}}>🏃 Jugadores ({players.length}/15)</h4>
                     <span style={{fontSize:'0.8rem', color: players.length >= 5 ? 'green' : 'red'}}>
@@ -185,21 +169,18 @@ const RosterForm: React.FC<{ forma21Id: string, nombreEquipo: string, onSuccess:
                     </span>
                 </div>
 
-                {/* 5. FORMULARIO ACTUALIZADO CON NUEVOS CAMPOS */}
                 <form onSubmit={handleAddPlayer} style={{background:'#f8f9fa', padding:'10px', borderRadius:'8px', marginBottom:'20px', border:'1px solid #e9ecef'}}>
                     <div style={{display:'grid', gridTemplateColumns:'0.5fr 1.5fr 1fr 1fr', gap:'8px', marginBottom:'8px'}}>
                         <input style={{padding:'8px', border:'1px solid #ccc', borderRadius:'4px'}} type="number" placeholder="#" value={numero} onChange={e=>setNumero(e.target.value)} required />
                         <input style={{padding:'8px', border:'1px solid #ccc', borderRadius:'4px'}} type="text" placeholder="Nombre Completo" value={nombre} onChange={e=>setNombre(e.target.value)} required />
-                        {/* Inputs Nuevos */}
                         <input style={{padding:'8px', border:'1px solid #ccc', borderRadius:'4px'}} type="text" placeholder="Cédula" value={cedula} onChange={e=>setCedula(e.target.value)} required />
                         <input style={{padding:'8px', border:'1px solid #ccc', borderRadius:'4px'}} type="text" placeholder="Teléfono" value={telefono} onChange={e=>setTelefono(e.target.value)} required />
                     </div>
                     <button type="submit" className="btn btn-primary" style={{width:'100%'}} disabled={players.length >= 15 || loading}>
-                        {loading ? 'Guardando...' : '+ AGREGAR JUGADOR A LA LISTA'}
+                        {loading ? 'Guardando...' : '+ AGREGAR JUGADOR'}
                     </button>
                 </form>
 
-                {/* LISTA ACTUALIZADA */}
                 <div style={{display:'grid', gap:'8px', maxHeight:'300px', overflowY:'auto'}}>
                     {players.sort((a,b)=>a.numero - b.numero).map(p => (
                         <div key={p.id} style={{display:'flex', justifyContent:'space-between', padding:'8px', background:'white', borderBottom:'1px solid #eee', alignItems:'center', borderRadius:'4px', border:'1px solid #eee'}}>
